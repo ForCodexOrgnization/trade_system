@@ -586,6 +586,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import TradesVizChart from '../components/TradesVizChart.vue'
+import { responseRows } from '../api/pagination'
 import {
   createDailyReview,
   fetchDailyReviews,
@@ -1066,7 +1067,7 @@ async function loadTimeline() {
   if (timelineDateFrom.value) params.date_from = timelineDateFrom.value
   if (timelineDateTo.value) params.date_to = timelineDateTo.value
   const timelineRes = await fetchDailyReviews(params)
-  dailyTimeline.value = timelineRes.data?.results || []
+  dailyTimeline.value = responseRows(timelineRes.data)
 }
 
 function dailyPnl(item) {

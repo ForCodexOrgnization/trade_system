@@ -7,13 +7,13 @@ from django.db import connection
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.generics import ListAPIView
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from .models import RawIBKRExecution, TradeGroup
 from .serializers import TradeGroupSerializer, RawIBKRExecutionSerializer
 from apps.journal.models import TradeReview
+from apps.common.pagination import StandardPageNumberPagination
 
 
 ZERO = Decimal('0')
@@ -85,13 +85,9 @@ def _latest_groups_by_symbol(groups):
 
 
 class TradeGroupViewSet(ReadOnlyModelViewSet):
-    class DashboardPageNumberPagination(PageNumberPagination):
-        page_size_query_param = 'page_size'
-        max_page_size = 100
-
     serializer_class = TradeGroupSerializer
     queryset = TradeGroup.objects.all().order_by('-trade_date', '-id')
-    pagination_class = DashboardPageNumberPagination
+    pagination_class = StandardPageNumberPagination
 
     def _normalized_date_params(self):
         qp = self.request.query_params

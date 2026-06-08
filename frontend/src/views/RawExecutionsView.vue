@@ -47,6 +47,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { fetchRawExecutions } from '../api/trades'
+import { responseCount, responseRows } from '../api/pagination'
 import PaginationControls from '../components/PaginationControls.vue'
 
 const rows = ref([])
@@ -59,8 +60,8 @@ async function loadRows(nextPage = 1) {
   const params = { page: page.value, ...filters.value }
   Object.keys(params).forEach((key) => { if (!params[key]) delete params[key] })
   const res = await fetchRawExecutions(params)
-  rows.value = res.data.results || []
-  totalCount.value = res.data.count || rows.value.length
+  rows.value = responseRows(res.data)
+  totalCount.value = responseCount(res.data, rows.value)
 }
 
 function resetFilters() {

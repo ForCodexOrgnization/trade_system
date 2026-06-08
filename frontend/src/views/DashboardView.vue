@@ -335,6 +335,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { responseCount, responseRows } from '../api/pagination'
 import {
   fetchTradeDashboard,
   fetchTradeGroups,
@@ -966,14 +967,14 @@ async function loadRows(nextPage = latestPage.value) {
   latestPage.value = nextPage
   try {
     const groupsRes = await fetchLatestRows(latestPage.value)
-    rows.value = groupsRes.data.results || []
-    latestCount.value = groupsRes.data.count || rows.value.length
+    rows.value = responseRows(groupsRes.data)
+    latestCount.value = responseCount(groupsRes.data, rows.value)
   } catch (err) {
     if (err?.response?.status === 404 && latestPage.value > 1) {
       latestPage.value = 1
       const groupsRes = await fetchLatestRows(1)
-      rows.value = groupsRes.data.results || []
-      latestCount.value = groupsRes.data.count || rows.value.length
+      rows.value = responseRows(groupsRes.data)
+      latestCount.value = responseCount(groupsRes.data, rows.value)
       return
     }
     throw err
@@ -984,14 +985,14 @@ async function loadClosedRows(nextPage = closedPage.value) {
   closedPage.value = nextPage
   try {
     const res = await fetchClosedAnalyticsRows(closedPage.value)
-    closedRows.value = res.data.results || []
-    closedCount.value = res.data.count || closedRows.value.length
+    closedRows.value = responseRows(res.data)
+    closedCount.value = responseCount(res.data, closedRows.value)
   } catch (err) {
     if (err?.response?.status === 404 && closedPage.value > 1) {
       closedPage.value = 1
       const res = await fetchClosedAnalyticsRows(1)
-      closedRows.value = res.data.results || []
-      closedCount.value = res.data.count || closedRows.value.length
+      closedRows.value = responseRows(res.data)
+      closedCount.value = responseCount(res.data, closedRows.value)
       return
     }
     throw err
@@ -1058,16 +1059,16 @@ async function loadData({ keepExisting = true } = {}) {
   }
 
   if (rowsRes.status === 'fulfilled') {
-    rows.value = rowsRes.value.data.results || []
-    latestCount.value = rowsRes.value.data.count || rows.value.length
+    rows.value = responseRows(rowsRes.value.data)
+    latestCount.value = responseCount(rowsRes.value.data, rows.value)
   } else if (!keepExisting && !dashboardHydrated.value) {
     rows.value = []
     latestCount.value = 0
   }
 
   if (closedRes.status === 'fulfilled') {
-    closedRows.value = closedRes.value.data.results || []
-    closedCount.value = closedRes.value.data.count || closedRows.value.length
+    closedRows.value = responseRows(closedRes.value.data)
+    closedCount.value = responseCount(closedRes.value.data, closedRows.value)
   } else if (!keepExisting && !dashboardHydrated.value) {
     closedRows.value = []
     closedCount.value = 0
