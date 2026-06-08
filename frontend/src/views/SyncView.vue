@@ -58,6 +58,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { fetchSyncJobs, startIBKRSync } from '../api/syncs'
+import { responseCount, responseRows } from '../api/pagination'
 import PaginationControls from '../components/PaginationControls.vue'
 
 const loading = ref(false)
@@ -73,8 +74,8 @@ function formatDate(v) {
 async function loadJobs(nextPage = 1) {
   page.value = nextPage
   const res = await fetchSyncJobs({ page: page.value })
-  jobs.value = res.data.results || []
-  totalCount.value = res.data.count || jobs.value.length
+  jobs.value = responseRows(res.data)
+  totalCount.value = responseCount(res.data, jobs.value)
 }
 
 async function runSync() {

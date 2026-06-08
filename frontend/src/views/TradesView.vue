@@ -28,6 +28,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { fetchTradeGroups } from '../api/trades'
+import { responseCount, responseRows } from '../api/pagination'
 import TradeTable from '../components/TradeTable.vue'
 import PaginationControls from '../components/PaginationControls.vue'
 
@@ -43,8 +44,8 @@ async function loadTrades(nextPage = 1) {
   if (filters.value.symbol) params.symbol = filters.value.symbol
   if (filters.value.status) params.status = filters.value.status
   const res = await fetchTradeGroups(params)
-  rows.value = res.data.results || []
-  totalCount.value = res.data.count || rows.value.length
+  rows.value = responseRows(res.data)
+  totalCount.value = responseCount(res.data, rows.value)
 }
 
 function resetFilters() {
