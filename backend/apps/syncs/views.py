@@ -54,7 +54,11 @@ def _run_ibkr_sync(*, use_local_flex_xml: bool, job_type: str):
 
 class StartIBKRSyncAPIView(APIView):
     def post(self, request):
-        return _run_ibkr_sync(use_local_flex_xml=False, job_type='full_sync')
+        use_local_flex_xml = request.data.get('use_local_flex_xml') is True
+        return _run_ibkr_sync(
+            use_local_flex_xml=use_local_flex_xml,
+            job_type='local_full_sync' if use_local_flex_xml else 'full_sync',
+        )
 
 
 class StartLocalIBKRSyncAPIView(APIView):
