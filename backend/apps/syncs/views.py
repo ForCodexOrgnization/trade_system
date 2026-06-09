@@ -11,40 +11,55 @@ from .models import SyncJob
 from .serializers import SyncJobSerializer
 
 
+def _run_ibkr_sync(*, use_local_flex_xml: bool, job_type: str):
+    if SyncJob.objects.filter(source='ibkr', status='running').exists():
+        return Response(
+            {'error': 'A sync job is already running. Please wait for it to finish.'},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    job = SyncJob.objects.create(
+        source='ibkr',
+        job_type=job_type,
+        status='running',
+        started_at=timezone.now(),
+    )
+    try:
+        service = IBKRSyncService(client=IBKRClient(use_local_flex_xml=use_local_flex_xml))
+        result = service.run_full_sync(job)
+        job.finished_at = timezone.now()
+        if job.status == 'running':
+            job.status = 'success'
+        job.save(update_fields=['finished_at', 'status', 'updated_at'])
+        return Response({'job_id': job.id, 'result': result})
+    except FileNotFoundError as exc:
+        job.status = 'failed'
+        job.error_message = str(exc)
+        job.finished_at = timezone.now()
+        job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
+        return Response({'error': str(exc)}, status=status.HTTP_404_NOT_FOUND)
+    except RuntimeError as exc:
+        job.status = 'failed'
+        job.error_message = str(exc)
+        job.finished_at = timezone.now()
+        job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
+        return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except Exception as exc:
+        job.status = 'failed'
+        job.error_message = str(exc)
+        job.finished_at = timezone.now()
+        job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
+        return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class StartIBKRSyncAPIView(APIView):
     def post(self, request):
-        if SyncJob.objects.filter(source='ibkr', status='running').exists():
-            return Response(
-                {'error': 'A sync job is already running. Please wait for it to finish.'},
-                status=status.HTTP_409_CONFLICT,
-            )
+        return _run_ibkr_sync(use_local_flex_xml=False, job_type='full_sync')
 
-        job = SyncJob.objects.create(
-            source='ibkr',
-            job_type='full_sync',
-            status='running',
-            started_at=timezone.now(),
-        )
-        try:
-            service = IBKRSyncService(client=IBKRClient())
-            result = service.run_full_sync(job)
-            job.finished_at = timezone.now()
-            if job.status == 'running':
-                job.status = 'success'
-            job.save(update_fields=['finished_at', 'status', 'updated_at'])
-            return Response({'job_id': job.id, 'result': result})
-        except RuntimeError as exc:
-            job.status = 'failed'
-            job.error_message = str(exc)
-            job.finished_at = timezone.now()
-            job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
-            return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as exc:
-            job.status = 'failed'
-            job.error_message = str(exc)
-            job.finished_at = timezone.now()
-            job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
-            return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class StartLocalIBKRSyncAPIView(APIView):
+    def post(self, request):
+        return _run_ibkr_sync(use_local_flex_xml=True, job_type='local_full_sync')
 
 
 class SyncJobListAPIView(ListAPIView):
