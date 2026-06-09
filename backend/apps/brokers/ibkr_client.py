@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from decimal import Decimal
 from datetime import datetime
 import xml.etree.ElementTree as ET
@@ -11,9 +12,38 @@ from django.utils import timezone
 class IBKRClient:
     SEND_RETRYABLE_ERROR_CODES = {"1001"}
 
+    def __init__(self, use_local_flex_xml: bool = False):
+        self.use_local_flex_xml = use_local_flex_xml
+
+    @property
+    def flex_statement_cache_path(self) -> Path:
+        return Path(settings.BASE_DIR) / "data" / "ibkr_last_flex_statement.xml"
+
+    @property
+    def has_flex_statement_cache(self) -> bool:
+        return self.flex_statement_cache_path.exists()
+
     def fetch_all_executions(self) -> list[dict]:
-        xml_text = self.fetch_flex_statement_xml()
+        if self.use_local_flex_xml:
+            xml_text = self.fetch_local_flex_statement_xml()
+        else:
+            xml_text = self.fetch_flex_statement_xml()
+            self.cache_flex_statement_xml(xml_text)
         return self.parse_flex_xml(xml_text)
+
+    def fetch_local_flex_statement_xml(self) -> str:
+        path = self.flex_statement_cache_path
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Local IBKR Flex XML cache not found at {path}. "
+                "Run a real IBKR sync once before using local sync."
+            )
+        return path.read_text(encoding="utf-8")
+
+    def cache_flex_statement_xml(self, xml_text: str) -> None:
+        path = self.flex_statement_cache_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(xml_text, encoding="utf-8")
 
     def fetch_flex_statement_xml(self) -> str:
         token = settings.IBKR_FLEX_TOKEN
