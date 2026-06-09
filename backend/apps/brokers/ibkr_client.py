@@ -19,6 +19,10 @@ class IBKRClient:
     def flex_statement_cache_path(self) -> Path:
         return Path(settings.BASE_DIR) / "data" / "ibkr_last_flex_statement.xml"
 
+    @property
+    def has_flex_statement_cache(self) -> bool:
+        return self.flex_statement_cache_path.exists()
+
     def fetch_all_executions(self) -> list[dict]:
         if self.use_local_flex_xml:
             xml_text = self.fetch_local_flex_statement_xml()

@@ -12,6 +12,21 @@ from .serializers import SyncJobSerializer
 
 
 def _run_ibkr_sync(*, use_local_flex_xml: bool, job_type: str):
+    client = IBKRClient(use_local_flex_xml=use_local_flex_xml)
+    if use_local_flex_xml and not client.has_flex_statement_cache:
+        cache_path = client.flex_statement_cache_path
+        return Response(
+            {
+                'error': (
+                    f'Local IBKR Flex XML cache not found at {cache_path}. '
+                    'Run a real IBKR sync once before using local sync.'
+                ),
+                'code': 'local_flex_xml_cache_missing',
+                'cache_path': str(cache_path),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     if SyncJob.objects.filter(source='ibkr', status='running').exists():
         return Response(
             {'error': 'A sync job is already running. Please wait for it to finish.'},
@@ -25,7 +40,7 @@ def _run_ibkr_sync(*, use_local_flex_xml: bool, job_type: str):
         started_at=timezone.now(),
     )
     try:
-        service = IBKRSyncService(client=IBKRClient(use_local_flex_xml=use_local_flex_xml))
+        service = IBKRSyncService(client=client)
         result = service.run_full_sync(job)
         job.finished_at = timezone.now()
         if job.status == 'running':
@@ -37,7 +52,7 @@ def _run_ibkr_sync(*, use_local_flex_xml: bool, job_type: str):
         job.error_message = str(exc)
         job.finished_at = timezone.now()
         job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
-        return Response({'error': str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': str(exc), 'code': 'local_flex_xml_cache_missing'}, status=status.HTTP_400_BAD_REQUEST)
     except RuntimeError as exc:
         job.status = 'failed'
         job.error_message = str(exc)
@@ -75,9 +90,13 @@ class IBKRConfigDebugAPIView(APIView):
     def get(self, request):
         token = settings.IBKR_FLEX_TOKEN or ""
         query_id = settings.IBKR_FLEX_QUERY_ID or ""
+        client = IBKRClient(use_local_flex_xml=True)
+        cache_path = client.flex_statement_cache_path
         return Response({
             "token_exists": bool(token),
             "query_id_exists": bool(query_id),
             "token_preview": f"{token[:6]}...{token[-4:]}" if len(token) >= 10 else "",
             "query_id": query_id,
+            "local_flex_xml_cache_exists": client.has_flex_statement_cache,
+            "local_flex_xml_cache_path": str(cache_path),
         })

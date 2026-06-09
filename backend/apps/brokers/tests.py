@@ -36,3 +36,11 @@ class IBKRClientLocalCacheTests(SimpleTestCase):
 
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]['order_id'], 'order-1')
+
+    def test_local_cache_existence_is_reported_before_reading(self):
+        with TemporaryDirectory() as tmpdir, override_settings(BASE_DIR=Path(tmpdir)):
+            client = IBKRClient(use_local_flex_xml=True)
+
+            self.assertFalse(client.has_flex_statement_cache)
+            with self.assertRaises(FileNotFoundError):
+                client.fetch_all_executions()
