@@ -72,17 +72,24 @@ ASGI_APPLICATION = 'config.asgi.application'
 
 DB_ENGINE = os.environ.get('DB_ENGINE', 'sqlite').lower()
 
-
-DATABASES = {
-'default': {
-    'ENGINE': 'django.db.backends.postgresql',
-    'NAME': os.environ.get('POSTGRES_DB', 'trade_journal'),
-    'USER': os.environ.get('POSTGRES_USER', 'trade_user'),
-    'PASSWORD': os.environ.get('POSTGRES_PASSWORD', '123456'),
-    'HOST': os.environ.get('POSTGRES_HOST', 'db'),
-    'PORT': os.environ.get('POSTGRES_PORT', '5432'),
-}
-}
+if DB_ENGINE in {'postgres', 'postgresql'}:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', os.environ.get('DB_NAME', 'trade_journal')),
+            'USER': os.environ.get('POSTGRES_USER', os.environ.get('DB_USER', 'trade_user')),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', os.environ.get('DB_PASSWORD', '123456')),
+            'HOST': os.environ.get('POSTGRES_HOST', os.environ.get('DB_HOST', '127.0.0.1')),
+            'PORT': os.environ.get('POSTGRES_PORT', os.environ.get('DB_PORT', '5432')),
+        }
+    }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': os.environ.get('SQLITE_NAME', BASE_DIR / 'db.sqlite3'),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = []
 

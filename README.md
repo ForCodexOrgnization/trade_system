@@ -19,6 +19,7 @@
 - `docs/` 设计说明
 
 ## 后端启动
+默认使用 SQLite，可直接本地启动：
 ```bash
 cd backend
 python -m venv .venv
@@ -26,6 +27,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver
+```
+
+如需使用 PostgreSQL，先启动数据库并显式设置 `DB_ENGINE=postgres`：
+```bash
+docker compose up -d db
+cd backend
+DB_ENGINE=postgres python manage.py migrate
+DB_ENGINE=postgres python manage.py runserver
 ```
 
 ## 前端启动
