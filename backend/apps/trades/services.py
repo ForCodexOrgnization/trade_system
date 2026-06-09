@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from decimal import Decimal
 
 from django.db import connection
@@ -20,6 +21,22 @@ FUTURES_MULTIPLIERS = {
     'MNQ': Decimal('2'),
     'NQ': Decimal('20'),
 }
+
+
+@dataclass
+class SyntheticSpreadFill:
+    symbol: str
+    asset_class: str
+    side: str
+    quantity: Decimal
+    price: Decimal
+    commission: Decimal
+    executed_at: object
+    raw_execution: object = None
+    trade_day: object = None
+    id: int = 0
+    spread_leg_count: int = 0
+    spread_symbols: tuple = ()
 
 
 def _to_decimal(value, default: str = '0') -> Decimal:
@@ -115,7 +132,6 @@ def _extract_multiplier(fill) -> Decimal:
 
 
 
-
 def _normalize_combo_key(value):
     if value in (None, ''):
         return ''
@@ -148,6 +164,8 @@ def _infer_combo_key(fill):
 
 def _build_position_group_key(fill):
     account = getattr(fill.raw_execution, 'account', None) if getattr(fill, 'raw_execution', None) else None
+    if isinstance(fill, SyntheticSpreadFill):
+        return (account or '', fill.symbol or '', fill.asset_class or '')
     combo_key = _infer_combo_key(fill)
     if combo_key:
         return (account or '', f'combo::{combo_key}', fill.asset_class or '')
@@ -159,6 +177,111 @@ def _display_symbol_for_bucket(fills):
     if len(symbols) <= 1:
         return symbols[0] if symbols else ''
     return 'SPREAD(' + ','.join(symbols) + ')'
+
+
+
+def _raw_order_combo_key(fill):
+    raw_execution = getattr(fill, 'raw_execution', None)
+    if raw_execution is None:
+        return ''
+    account = getattr(raw_execution, 'account', None) or ''
+    order_id = getattr(raw_execution, 'order_id', None) or getattr(raw_execution, 'perm_id', None) or ''
+    explicit_combo_key = _infer_combo_key(fill)
+    if explicit_combo_key:
+        return f"{account}|explicit|{explicit_combo_key}"
+    if not order_id:
+        return ''
+    # IBKR Flex reports a native spread as one order with multiple leg executions.
+    # A standalone order may have multiple partial fills, so it is only treated as a
+    # spread later if this key contains more than one distinct contract/symbol.
+    return f"{account}|order|{order_id}"
+
+
+def _leg_identity(fill):
+    raw_execution = getattr(fill, 'raw_execution', None)
+    conid = getattr(raw_execution, 'conid', None) if raw_execution is not None else None
+    return str(conid or fill.symbol or '').strip()
+
+
+def _collect_spread_order_keys(fills):
+    candidates = defaultdict(list)
+    for fill in fills:
+        key = _raw_order_combo_key(fill)
+        if key:
+            candidates[key].append(fill)
+
+    spread_keys = set()
+    for key, key_fills in candidates.items():
+        leg_identities = {_leg_identity(fill) for fill in key_fills if _leg_identity(fill)}
+        sides = {(fill.side or '').upper() for fill in key_fills}
+        if len(leg_identities) > 1 and {'BUY', 'SELL'}.issubset(sides):
+            spread_keys.add(key)
+    return spread_keys
+
+
+def _build_synthetic_spread_fill(spread_key, key_fills):
+    ordered = sorted(key_fills, key=lambda item: (item.executed_at, item.id))
+    symbols = tuple(sorted({(fill.symbol or '').strip() for fill in ordered if (fill.symbol or '').strip()}))
+    display_symbol = 'SPREAD(' + ','.join(symbols) + ')'
+    first_fill = ordered[0]
+    buy_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'BUY'), ZERO)
+    sell_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'SELL'), ZERO)
+    spread_qty = max(buy_qty, sell_qty)
+    if spread_qty <= ZERO:
+        spread_qty = max((_to_decimal(fill.quantity) for fill in ordered), default=ZERO)
+
+    buy_notional = sum(
+        (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'BUY'),
+        ZERO,
+    )
+    sell_notional = sum(
+        (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'SELL'),
+        ZERO,
+    )
+    net_debit = buy_notional - sell_notional
+    synthetic_side = 'BUY' if net_debit >= ZERO else 'SELL'
+    price = (abs(net_debit) / spread_qty) if spread_qty > ZERO else ZERO
+
+    return SyntheticSpreadFill(
+        symbol=display_symbol,
+        asset_class=first_fill.asset_class,
+        side=synthetic_side,
+        quantity=spread_qty,
+        price=price,
+        commission=sum((_to_decimal(fill.commission) for fill in ordered), ZERO),
+        executed_at=first_fill.executed_at,
+        raw_execution=first_fill.raw_execution,
+        trade_day=getattr(first_fill, 'trade_day', None),
+        id=first_fill.id,
+        spread_leg_count=len(ordered),
+        spread_symbols=symbols,
+    )
+
+
+def _prepare_rebuild_fills(fills):
+    spread_order_keys = _collect_spread_order_keys(fills)
+    if not spread_order_keys:
+        return fills
+
+    normal_fills = []
+    spread_fills_by_order = defaultdict(list)
+    for fill in fills:
+        spread_key = _raw_order_combo_key(fill)
+        if spread_key in spread_order_keys:
+            spread_fills_by_order[spread_key].append(fill)
+        else:
+            normal_fills.append(fill)
+
+    synthetic_spreads = [
+        _build_synthetic_spread_fill(spread_key, key_fills)
+        for spread_key, key_fills in spread_fills_by_order.items()
+    ]
+    return sorted(
+        normal_fills + synthetic_spreads,
+        key=lambda item: (item.symbol, item.asset_class or '', item.executed_at, item.id),
+    )
+
+
 def _new_trade_bucket(fill, direction: str):
     return {
         'symbol': fill.symbol,
@@ -309,6 +432,7 @@ def rebuild_all_trade_groups():
         .all()
         .order_by('symbol', 'asset_class', 'executed_at', 'id')
     )
+    fills = _prepare_rebuild_fills(fills)
 
     has_matched_lot_table = _has_trade_matched_lot_table()
 
