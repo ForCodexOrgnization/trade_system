@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
-from .services import SyntheticSpreadFill, _prepare_rebuild_fills
+from .services import (
+    SyntheticSpreadFill,
+    _build_position_group_key,
+    _infer_combo_key,
+    _prepare_rebuild_fills,
+)
 
 
 class SpreadAggregationTests(SimpleTestCase):
@@ -54,3 +59,35 @@ class SpreadAggregationTests(SimpleTestCase):
         prepared = _prepare_rebuild_fills(rows)
 
         self.assertEqual(prepared, rows)
+
+    def test_order_reference_does_not_make_standalone_combo_bucket(self):
+        buy = self._fill(
+            fill_id=1, order_id='300', symbol='SGOV', side='BUY', quantity='10', price='100'
+        )
+        sell = self._fill(
+            fill_id=2, order_id='301', symbol='SGOV', side='SELL', quantity='10', price='101'
+        )
+        buy.raw_execution.raw_payload = {
+            'orderReference': 'strategy-buy',
+            'strategyId': 'not-a-spread-key',
+        }
+        sell.raw_execution.raw_payload = {
+            'orderReference': 'strategy-sell',
+            'strategyId': 'not-a-spread-key',
+        }
+
+        self.assertEqual(_infer_combo_key(buy), '')
+        self.assertEqual(_infer_combo_key(sell), '')
+        self.assertEqual(_build_position_group_key(buy), _build_position_group_key(sell))
+
+    def test_explicit_combo_key_still_creates_combo_bucket(self):
+        fill = self._fill(
+            fill_id=1, order_id='400', symbol='MCLN6', side='BUY', quantity='1', price='90'
+        )
+        fill.raw_execution.raw_payload = {
+            'combo_id': 'native-spread-1',
+            'orderReference': 'strategy-name',
+        }
+
+        self.assertEqual(_infer_combo_key(fill), 'native-spread-1')
+        self.assertEqual(_build_position_group_key(fill), ('DU123', 'combo::native-spread-1', 'FUT'))
