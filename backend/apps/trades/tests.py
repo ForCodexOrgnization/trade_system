@@ -7,6 +7,7 @@ from django.test import SimpleTestCase
 from .services import (
     SyntheticSpreadFill,
     _build_position_group_key,
+    _build_trade_buckets,
     _infer_combo_key,
     _prepare_rebuild_fills,
 )
@@ -240,7 +241,7 @@ class SpreadAggregationTests(SimpleTestCase):
         self.assertEqual(prepared, rows)
 
 
-    def test_fallback_spreads_keep_execution_key_in_position_group(self):
+    def test_fallback_spreads_share_position_group_by_spread_symbol(self):
         first_time = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)
         second_time = datetime(2026, 5, 14, 14, 49, 4, tzinfo=timezone.utc)
         rows = [
@@ -311,8 +312,18 @@ class SpreadAggregationTests(SimpleTestCase):
         self.assertEqual(len(prepared), 2)
         self.assertEqual({fill.symbol for fill in prepared}, {'SPREAD(MCLN6,MCLQ6)'})
         position_keys = {_build_position_group_key(fill) for fill in prepared}
-        self.assertEqual(len(position_keys), 2)
-        self.assertTrue(all('fallback_exec' in key[1] for key in position_keys))
+        self.assertEqual(position_keys, {('DU123', 'SPREAD(MCLN6,MCLQ6)', 'FUT')})
+        self.assertEqual([fill.side for fill in prepared], ['BUY', 'SELL'])
+        self.assertEqual([fill.quantity for fill in prepared], [Decimal('1'), Decimal('1')])
+
+        buckets = _build_trade_buckets(prepared)
+        self.assertEqual(len(buckets), 1)
+        bucket = buckets[0]
+        self.assertEqual(bucket['symbol'], 'SPREAD(MCLN6,MCLQ6)')
+        self.assertEqual(bucket['status'], 'closed')
+        self.assertEqual(bucket['total_buy_qty'], Decimal('1'))
+        self.assertEqual(bucket['total_sell_qty'], Decimal('1'))
+        self.assertEqual(bucket['open_qty'], Decimal('0'))
 
     def test_fallback_does_not_collapse_normal_futures_orders(self):
         executed_at = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)

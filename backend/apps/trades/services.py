@@ -165,9 +165,11 @@ def _infer_combo_key(fill):
 def _build_position_group_key(fill):
     account = getattr(fill.raw_execution, 'account', None) if getattr(fill, 'raw_execution', None) else None
     if isinstance(fill, SyntheticSpreadFill):
-        spread_execution_key = getattr(fill, 'spread_execution_key', '') or ''
-        if spread_execution_key:
-            return (account or '', f"{fill.symbol or ''}::{spread_execution_key}", fill.asset_class or '')
+        # A synthetic spread fill represents one execution of a calendar-spread
+        # position.  Position grouping must use the canonical spread symbol (plus
+        # account/asset class), not the per-execution fallback key, otherwise every
+        # fallback-detected spread execution becomes an isolated open trade and the
+        # later reverse spread can never close the earlier one.
         return (account or '', fill.symbol or '', fill.asset_class or '')
     combo_key = _infer_combo_key(fill)
     if combo_key:
@@ -593,6 +595,78 @@ def _finalize_bucket(bucket, *, force_open=False):
     }
 
 
+def _build_trade_buckets(fills):
+    trade_buckets = []
+    fills_by_position_key = defaultdict(list)
+    for fill in fills:
+        key = _build_position_group_key(fill)
+        fills_by_position_key[key].append(fill)
+
+    for (_, _symbol, _asset_class), key_fills in fills_by_position_key.items():
+        current_bucket = None
+        bucket_display_symbol = _display_symbol_for_bucket(key_fills)
+
+        for fill in key_fills:
+            side = (fill.side or '').upper()
+            if side not in ('BUY', 'SELL'):
+                continue
+
+            fill_qty_total = _to_decimal(fill.quantity)
+            if fill_qty_total <= ZERO:
+                continue
+
+            fill_price = _to_decimal(fill.price)
+            fill_commission = _to_decimal(fill.commission)
+            qty_remaining = fill_qty_total
+
+            while qty_remaining > ZERO:
+                if current_bucket is None:
+                    direction = 'long' if side == 'BUY' else 'short'
+                    current_bucket = _new_trade_bucket(fill, direction)
+                    current_bucket['symbol'] = bucket_display_symbol or fill.symbol
+
+                position_sign = _sign(current_bucket['position_qty'])
+                side_sign = 1 if side == 'BUY' else -1
+
+                if position_sign == 0 or position_sign == side_sign:
+                    segment_qty = qty_remaining
+                    segment_commission = fill_commission * (segment_qty / fill_qty_total)
+                    _apply_segment(
+                        current_bucket,
+                        side=side,
+                        qty=segment_qty,
+                        price=fill_price,
+                        commission=segment_commission,
+                        is_entry=True,
+                        executed_at=fill.executed_at,
+                    )
+                    qty_remaining -= segment_qty
+                    continue
+
+                closing_capacity = abs(current_bucket['position_qty'])
+                segment_qty = min(qty_remaining, closing_capacity)
+                segment_commission = fill_commission * (segment_qty / fill_qty_total)
+                _apply_segment(
+                    current_bucket,
+                    side=side,
+                    qty=segment_qty,
+                    price=fill_price,
+                    commission=segment_commission,
+                    is_entry=False,
+                    executed_at=fill.executed_at,
+                )
+                qty_remaining -= segment_qty
+
+                if current_bucket['position_qty'] == ZERO:
+                    trade_buckets.append(_finalize_bucket(current_bucket))
+                    current_bucket = None
+
+        if current_bucket is not None:
+            trade_buckets.append(_finalize_bucket(current_bucket, force_open=True))
+
+    return trade_buckets
+
+
 @transaction.atomic
 def create_fill_from_raw(raw_execution: RawIBKRExecution):
     side = (raw_execution.side or '').upper()
@@ -677,73 +751,7 @@ def rebuild_all_trade_groups():
         TradeGroup.all_objects.all().delete()
         return
 
-    trade_buckets = []
-    fills_by_position_key = defaultdict(list)
-    for fill in fills:
-        key = _build_position_group_key(fill)
-        fills_by_position_key[key].append(fill)
-
-    for (_, _symbol, _asset_class), key_fills in fills_by_position_key.items():
-        current_bucket = None
-        bucket_display_symbol = _display_symbol_for_bucket(key_fills)
-
-        for fill in key_fills:
-            side = (fill.side or '').upper()
-            if side not in ('BUY', 'SELL'):
-                continue
-
-            fill_qty_total = _to_decimal(fill.quantity)
-            if fill_qty_total <= ZERO:
-                continue
-
-            fill_price = _to_decimal(fill.price)
-            fill_commission = _to_decimal(fill.commission)
-            qty_remaining = fill_qty_total
-
-            while qty_remaining > ZERO:
-                if current_bucket is None:
-                    direction = 'long' if side == 'BUY' else 'short'
-                    current_bucket = _new_trade_bucket(fill, direction)
-                    current_bucket['symbol'] = bucket_display_symbol or fill.symbol
-
-                position_sign = _sign(current_bucket['position_qty'])
-                side_sign = 1 if side == 'BUY' else -1
-
-                if position_sign == 0 or position_sign == side_sign:
-                    segment_qty = qty_remaining
-                    segment_commission = fill_commission * (segment_qty / fill_qty_total)
-                    _apply_segment(
-                        current_bucket,
-                        side=side,
-                        qty=segment_qty,
-                        price=fill_price,
-                        commission=segment_commission,
-                        is_entry=True,
-                        executed_at=fill.executed_at,
-                    )
-                    qty_remaining -= segment_qty
-                    continue
-
-                closing_capacity = abs(current_bucket['position_qty'])
-                segment_qty = min(qty_remaining, closing_capacity)
-                segment_commission = fill_commission * (segment_qty / fill_qty_total)
-                _apply_segment(
-                    current_bucket,
-                    side=side,
-                    qty=segment_qty,
-                    price=fill_price,
-                    commission=segment_commission,
-                    is_entry=False,
-                    executed_at=fill.executed_at,
-                )
-                qty_remaining -= segment_qty
-
-                if current_bucket['position_qty'] == ZERO:
-                    trade_buckets.append(_finalize_bucket(current_bucket))
-                    current_bucket = None
-
-        if current_bucket is not None:
-            trade_buckets.append(_finalize_bucket(current_bucket, force_open=True))
+    trade_buckets = _build_trade_buckets(fills)
 
     retained_group_ids = set()
     for bucket in sorted(
