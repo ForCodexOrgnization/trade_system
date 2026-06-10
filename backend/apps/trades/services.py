@@ -38,6 +38,7 @@ class SyntheticSpreadFill:
     id: int = 0
     spread_leg_count: int = 0
     spread_symbols: tuple = ()
+    spread_execution_key: str = ''
 
 
 def _to_decimal(value, default: str = '0') -> Decimal:
@@ -164,6 +165,9 @@ def _infer_combo_key(fill):
 def _build_position_group_key(fill):
     account = getattr(fill.raw_execution, 'account', None) if getattr(fill, 'raw_execution', None) else None
     if isinstance(fill, SyntheticSpreadFill):
+        spread_execution_key = getattr(fill, 'spread_execution_key', '') or ''
+        if spread_execution_key:
+            return (account or '', f"{fill.symbol or ''}::{spread_execution_key}", fill.asset_class or '')
         return (account or '', fill.symbol or '', fill.asset_class or '')
     combo_key = _infer_combo_key(fill)
     if combo_key:
@@ -454,6 +458,7 @@ def _build_synthetic_spread_fill(spread_key, key_fills):
         id=first_fill.id,
         spread_leg_count=len(ordered),
         spread_symbols=symbols,
+        spread_execution_key=spread_key if '|fallback_' in str(spread_key) else '',
     )
 
 

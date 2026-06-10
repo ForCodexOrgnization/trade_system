@@ -239,6 +239,81 @@ class SpreadAggregationTests(SimpleTestCase):
 
         self.assertEqual(prepared, rows)
 
+
+    def test_fallback_spreads_keep_execution_key_in_position_group(self):
+        first_time = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)
+        second_time = datetime(2026, 5, 14, 14, 49, 4, tzinfo=timezone.utc)
+        rows = [
+            self._fill(
+                fill_id=1,
+                order_id='leg-a',
+                symbol='MCLN6',
+                side='BUY',
+                quantity='1',
+                price='63.10',
+                executed_at=first_time,
+                raw_payload={
+                    'assetCategory': 'FUT',
+                    'underlyingSymbol': 'MCL',
+                    'orderTime': '20260514;144804',
+                    'ibExecID': '000100f5.6a0509a5.02.01',
+                },
+            ),
+            self._fill(
+                fill_id=2,
+                order_id='leg-b',
+                symbol='MCLQ6',
+                side='SELL',
+                quantity='1',
+                price='63.00',
+                executed_at=first_time,
+                raw_payload={
+                    'assetCategory': 'FUT',
+                    'underlyingSymbol': 'MCL',
+                    'orderTime': '20260514;144804',
+                    'ibExecID': '000100f5.6a0509a5.03.01',
+                },
+            ),
+            self._fill(
+                fill_id=3,
+                order_id='leg-c',
+                symbol='MCLN6',
+                side='SELL',
+                quantity='1',
+                price='63.20',
+                executed_at=second_time,
+                raw_payload={
+                    'assetCategory': 'FUT',
+                    'underlyingSymbol': 'MCL',
+                    'orderTime': '20260514;144904',
+                    'ibExecID': '000100f5.6a0509b6.02.01',
+                },
+            ),
+            self._fill(
+                fill_id=4,
+                order_id='leg-d',
+                symbol='MCLQ6',
+                side='BUY',
+                quantity='1',
+                price='63.05',
+                executed_at=second_time,
+                raw_payload={
+                    'assetCategory': 'FUT',
+                    'underlyingSymbol': 'MCL',
+                    'orderTime': '20260514;144904',
+                    'ibExecID': '000100f5.6a0509b6.03.01',
+                },
+            ),
+        ]
+
+        prepared = _prepare_rebuild_fills(rows)
+
+        self.assertEqual(len(prepared), 2)
+        self.assertEqual({fill.symbol for fill in prepared}, {'SPREAD(MCLN6,MCLQ6)'})
+        position_keys = {_build_position_group_key(fill) for fill in prepared}
+        self.assertEqual(len(position_keys), 2)
+        self.assertTrue(all('fallback_exec' in key[1] for key in position_keys))
+
     def test_fallback_does_not_collapse_normal_futures_orders(self):
         executed_at = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)
         rows = [
