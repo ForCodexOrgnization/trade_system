@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.db import connection
@@ -37,6 +38,7 @@ class SyntheticSpreadFill:
     id: int = 0
     spread_leg_count: int = 0
     spread_symbols: tuple = ()
+    spread_execution_key: str = ''
 
 
 def _to_decimal(value, default: str = '0') -> Decimal:
@@ -163,6 +165,9 @@ def _infer_combo_key(fill):
 def _build_position_group_key(fill):
     account = getattr(fill.raw_execution, 'account', None) if getattr(fill, 'raw_execution', None) else None
     if isinstance(fill, SyntheticSpreadFill):
+        spread_execution_key = getattr(fill, 'spread_execution_key', '') or ''
+        if spread_execution_key:
+            return (account or '', f"{fill.symbol or ''}::{spread_execution_key}", fill.asset_class or '')
         return (account or '', fill.symbol or '', fill.asset_class or '')
     combo_key = _infer_combo_key(fill)
     if combo_key:
@@ -195,10 +200,204 @@ def _raw_order_combo_key(fill):
     return f"{account}|order|{order_id}"
 
 
-def _leg_identity(fill):
+def _payload_value(fill, *names):
     raw_execution = getattr(fill, 'raw_execution', None)
-    conid = getattr(raw_execution, 'conid', None) if raw_execution is not None else None
-    return str(conid or fill.symbol or '').strip()
+    payload = getattr(raw_execution, 'raw_payload', None) or {}
+    for name in names:
+        if raw_execution is not None and hasattr(raw_execution, name):
+            value = getattr(raw_execution, name)
+            if value not in (None, ''):
+                return value
+        value = payload.get(name)
+        if value not in (None, ''):
+            return value
+    return ''
+
+
+def _is_futures_fill(fill):
+    asset_class = (getattr(fill, 'asset_class', None) or '').upper()
+    sec_type = str(_payload_value(fill, 'sec_type', 'assetCategory')).upper()
+    return asset_class == 'FUT' or sec_type == 'FUT'
+
+
+def _fallback_underlying_symbol(fill):
+    return str(_payload_value(fill, 'underlyingSymbol')).strip().upper()
+
+
+def _fallback_execution_prefix(fill):
+    execution_id = str(_payload_value(fill, 'execution_id', 'ibExecID')).strip()
+    if not execution_id:
+        return ''
+    parts = execution_id.split('.')
+    if len(parts) < 3:
+        return ''
+    return '.'.join(parts[:-2])
+
+
+def _fallback_rtn_key(fill):
+    rtn = str(_payload_value(fill, 'rtn')).strip()
+    parts = rtn.split('.')
+    if len(parts) < 4 or not all(parts[index] for index in (0, 2, 3)):
+        return ''
+    return '.'.join((parts[0], parts[2], parts[3]))
+
+
+def _parse_ibkr_time(value):
+    if value in (None, ''):
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    for fmt in ('%Y%m%d;%H%M%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
+        try:
+            return datetime.strptime(text[:19], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _seconds_apart(left, right):
+    if left is None or right is None:
+        return None
+    if timezone.is_aware(left):
+        left = timezone.make_naive(left, dt_timezone.utc)
+    if timezone.is_aware(right):
+        right = timezone.make_naive(right, dt_timezone.utc)
+    return abs((left - right).total_seconds())
+
+
+def _times_close(left, right, *, tolerance=timedelta(seconds=2)):
+    seconds = _seconds_apart(left, right)
+    return seconds is not None and seconds <= tolerance.total_seconds()
+
+
+def _order_times_close(left_fill, right_fill):
+    left_order_time = _parse_ibkr_time(_payload_value(left_fill, 'orderTime'))
+    right_order_time = _parse_ibkr_time(_payload_value(right_fill, 'orderTime'))
+    if left_order_time is None and right_order_time is None:
+        return True
+    return _times_close(left_order_time, right_order_time)
+
+
+def _looks_like_futures_calendar_spread_pair(left_fill, right_fill):
+    if not (_is_futures_fill(left_fill) and _is_futures_fill(right_fill)):
+        return False
+
+    left_underlying = _fallback_underlying_symbol(left_fill)
+    right_underlying = _fallback_underlying_symbol(right_fill)
+    if not left_underlying or left_underlying != right_underlying:
+        return False
+
+    left_symbol = getattr(left_fill, 'symbol', None) or ''
+    right_symbol = getattr(right_fill, 'symbol', None) or ''
+    if left_symbol == right_symbol:
+        return False
+
+    left_side = (getattr(left_fill, 'side', None) or '').upper()
+    right_side = (getattr(right_fill, 'side', None) or '').upper()
+    if {left_side, right_side} != {'BUY', 'SELL'}:
+        return False
+
+    left_qty = abs(_to_decimal(getattr(left_fill, 'quantity', ZERO)))
+    right_qty = abs(_to_decimal(getattr(right_fill, 'quantity', ZERO)))
+    if left_qty != right_qty:
+        return False
+
+    if not _times_close(
+        getattr(left_fill, 'executed_at', None),
+        getattr(right_fill, 'executed_at', None),
+    ):
+        return False
+
+    if not _order_times_close(left_fill, right_fill):
+        return False
+
+    return True
+
+
+def _fallback_spread_group_key(fill):
+    if not _is_futures_fill(fill):
+        return ''
+    underlying = _fallback_underlying_symbol(fill)
+    if not underlying:
+        return ''
+    account = getattr(getattr(fill, 'raw_execution', None), 'account', None) or ''
+    execution_prefix = _fallback_execution_prefix(fill)
+    if execution_prefix:
+        return f'{account}|fallback_exec|{underlying}|{execution_prefix}'
+    rtn_key = _fallback_rtn_key(fill)
+    if rtn_key:
+        return f'{account}|fallback_rtn|{underlying}|{rtn_key}'
+    return ''
+
+
+def _collect_fallback_spread_keys(fills):
+    candidates = defaultdict(list)
+    for fill in fills:
+        key = _fallback_spread_group_key(fill)
+        if key:
+            candidates[key].append(fill)
+
+    spread_keys = set()
+    for key, key_fills in candidates.items():
+        if len(key_fills) != 2:
+            continue
+        if _looks_like_futures_calendar_spread_pair(key_fills[0], key_fills[1]):
+            spread_keys.add(key)
+    return spread_keys
+
+
+def _leg_totals_by_symbol(fills):
+    legs = defaultdict(
+        lambda: {
+            'quantity': ZERO,
+            'notional': ZERO,
+            'sides': set(),
+        }
+    )
+    for fill in fills:
+        symbol = (fill.symbol or '').strip()
+        side = (fill.side or '').upper()
+        qty = _to_decimal(fill.quantity)
+        legs[symbol]['quantity'] += qty
+        legs[symbol]['notional'] += qty * _to_decimal(fill.price)
+        legs[symbol]['sides'].add(side)
+    return legs
+
+
+def _calendar_spread_shape(fills):
+    legs = _leg_totals_by_symbol(fills)
+    if len(legs) != 2:
+        return None
+
+    symbols = tuple(sorted(symbol for symbol in legs if symbol))
+    if len(symbols) != 2:
+        return None
+
+    left, right = symbols
+    left_leg = legs[left]
+    right_leg = legs[right]
+    if len(left_leg['sides']) != 1 or len(right_leg['sides']) != 1:
+        return None
+
+    left_side = next(iter(left_leg['sides']))
+    right_side = next(iter(right_leg['sides']))
+    if {left_side, right_side} != {'BUY', 'SELL'}:
+        return None
+
+    left_qty = left_leg['quantity']
+    right_qty = right_leg['quantity']
+    if left_qty <= ZERO or left_qty != right_qty:
+        return None
+
+    left_avg = left_leg['notional'] / left_qty
+    right_avg = right_leg['notional'] / right_qty
+    return {
+        'symbols': symbols,
+        'side': left_side,
+        'quantity': left_qty,
+        'price': left_avg - right_avg,
+    }
 
 
 def _collect_spread_order_keys(fills):
@@ -210,35 +409,41 @@ def _collect_spread_order_keys(fills):
 
     spread_keys = set()
     for key, key_fills in candidates.items():
-        leg_identities = {_leg_identity(fill) for fill in key_fills if _leg_identity(fill)}
-        sides = {(fill.side or '').upper() for fill in key_fills}
-        if len(leg_identities) > 1 and {'BUY', 'SELL'}.issubset(sides):
+        if _calendar_spread_shape(key_fills) is not None:
             spread_keys.add(key)
     return spread_keys
 
 
 def _build_synthetic_spread_fill(spread_key, key_fills):
     ordered = sorted(key_fills, key=lambda item: (item.executed_at, item.id))
-    symbols = tuple(sorted({(fill.symbol or '').strip() for fill in ordered if (fill.symbol or '').strip()}))
+    spread_shape = _calendar_spread_shape(ordered)
+    if spread_shape:
+        symbols = spread_shape['symbols']
+        synthetic_side = spread_shape['side']
+        spread_qty = spread_shape['quantity']
+        price = spread_shape['price']
+    else:
+        symbols = tuple(sorted({(fill.symbol or '').strip() for fill in ordered if (fill.symbol or '').strip()}))
+        buy_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'BUY'), ZERO)
+        sell_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'SELL'), ZERO)
+        spread_qty = max(buy_qty, sell_qty)
+        if spread_qty <= ZERO:
+            spread_qty = max((_to_decimal(fill.quantity) for fill in ordered), default=ZERO)
+
+        buy_notional = sum(
+            (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'BUY'),
+            ZERO,
+        )
+        sell_notional = sum(
+            (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'SELL'),
+            ZERO,
+        )
+        net_debit = buy_notional - sell_notional
+        synthetic_side = 'BUY' if net_debit >= ZERO else 'SELL'
+        price = (abs(net_debit) / spread_qty) if spread_qty > ZERO else ZERO
+
     display_symbol = 'SPREAD(' + ','.join(symbols) + ')'
     first_fill = ordered[0]
-    buy_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'BUY'), ZERO)
-    sell_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'SELL'), ZERO)
-    spread_qty = max(buy_qty, sell_qty)
-    if spread_qty <= ZERO:
-        spread_qty = max((_to_decimal(fill.quantity) for fill in ordered), default=ZERO)
-
-    buy_notional = sum(
-        (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'BUY'),
-        ZERO,
-    )
-    sell_notional = sum(
-        (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'SELL'),
-        ZERO,
-    )
-    net_debit = buy_notional - sell_notional
-    synthetic_side = 'BUY' if net_debit >= ZERO else 'SELL'
-    price = (abs(net_debit) / spread_qty) if spread_qty > ZERO else ZERO
 
     return SyntheticSpreadFill(
         symbol=display_symbol,
@@ -253,19 +458,23 @@ def _build_synthetic_spread_fill(spread_key, key_fills):
         id=first_fill.id,
         spread_leg_count=len(ordered),
         spread_symbols=symbols,
+        spread_execution_key=spread_key if '|fallback_' in str(spread_key) else '',
     )
 
 
 def _prepare_rebuild_fills(fills):
     spread_order_keys = _collect_spread_order_keys(fills)
-    if not spread_order_keys:
+    fallback_spread_keys = _collect_fallback_spread_keys(fills)
+    if not spread_order_keys and not fallback_spread_keys:
         return fills
 
     normal_fills = []
     spread_fills_by_order = defaultdict(list)
     for fill in fills:
         spread_key = _raw_order_combo_key(fill)
-        if spread_key in spread_order_keys:
+        if spread_key not in spread_order_keys:
+            spread_key = _fallback_spread_group_key(fill)
+        if spread_key in spread_order_keys or spread_key in fallback_spread_keys:
             spread_fills_by_order[spread_key].append(fill)
         else:
             normal_fills.append(fill)
