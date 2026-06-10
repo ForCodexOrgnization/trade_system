@@ -152,8 +152,6 @@ def _infer_combo_key(fill):
         payload.get('combo_id'),
         payload.get('comboId'),
         payload.get('spreadId'),
-        payload.get('strategyId'),
-        payload.get('orderReference'),
     ]
     for candidate in combo_key_candidates:
         normalized = _normalize_combo_key(candidate)
