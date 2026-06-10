@@ -343,10 +343,57 @@ def _collect_fallback_spread_keys(fills):
     return spread_keys
 
 
-def _leg_identity(fill):
-    raw_execution = getattr(fill, 'raw_execution', None)
-    conid = getattr(raw_execution, 'conid', None) if raw_execution is not None else None
-    return str(conid or fill.symbol or '').strip()
+def _leg_totals_by_symbol(fills):
+    legs = defaultdict(
+        lambda: {
+            'quantity': ZERO,
+            'notional': ZERO,
+            'sides': set(),
+        }
+    )
+    for fill in fills:
+        symbol = (fill.symbol or '').strip()
+        side = (fill.side or '').upper()
+        qty = _to_decimal(fill.quantity)
+        legs[symbol]['quantity'] += qty
+        legs[symbol]['notional'] += qty * _to_decimal(fill.price)
+        legs[symbol]['sides'].add(side)
+    return legs
+
+
+def _calendar_spread_shape(fills):
+    legs = _leg_totals_by_symbol(fills)
+    if len(legs) != 2:
+        return None
+
+    symbols = tuple(sorted(symbol for symbol in legs if symbol))
+    if len(symbols) != 2:
+        return None
+
+    left, right = symbols
+    left_leg = legs[left]
+    right_leg = legs[right]
+    if len(left_leg['sides']) != 1 or len(right_leg['sides']) != 1:
+        return None
+
+    left_side = next(iter(left_leg['sides']))
+    right_side = next(iter(right_leg['sides']))
+    if {left_side, right_side} != {'BUY', 'SELL'}:
+        return None
+
+    left_qty = left_leg['quantity']
+    right_qty = right_leg['quantity']
+    if left_qty <= ZERO or left_qty != right_qty:
+        return None
+
+    left_avg = left_leg['notional'] / left_qty
+    right_avg = right_leg['notional'] / right_qty
+    return {
+        'symbols': symbols,
+        'side': left_side,
+        'quantity': left_qty,
+        'price': left_avg - right_avg,
+    }
 
 
 def _collect_spread_order_keys(fills):
@@ -358,35 +405,41 @@ def _collect_spread_order_keys(fills):
 
     spread_keys = set()
     for key, key_fills in candidates.items():
-        leg_identities = {_leg_identity(fill) for fill in key_fills if _leg_identity(fill)}
-        sides = {(fill.side or '').upper() for fill in key_fills}
-        if len(leg_identities) > 1 and {'BUY', 'SELL'}.issubset(sides):
+        if _calendar_spread_shape(key_fills) is not None:
             spread_keys.add(key)
     return spread_keys
 
 
 def _build_synthetic_spread_fill(spread_key, key_fills):
     ordered = sorted(key_fills, key=lambda item: (item.executed_at, item.id))
-    symbols = tuple(sorted({(fill.symbol or '').strip() for fill in ordered if (fill.symbol or '').strip()}))
+    spread_shape = _calendar_spread_shape(ordered)
+    if spread_shape:
+        symbols = spread_shape['symbols']
+        synthetic_side = spread_shape['side']
+        spread_qty = spread_shape['quantity']
+        price = spread_shape['price']
+    else:
+        symbols = tuple(sorted({(fill.symbol or '').strip() for fill in ordered if (fill.symbol or '').strip()}))
+        buy_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'BUY'), ZERO)
+        sell_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'SELL'), ZERO)
+        spread_qty = max(buy_qty, sell_qty)
+        if spread_qty <= ZERO:
+            spread_qty = max((_to_decimal(fill.quantity) for fill in ordered), default=ZERO)
+
+        buy_notional = sum(
+            (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'BUY'),
+            ZERO,
+        )
+        sell_notional = sum(
+            (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'SELL'),
+            ZERO,
+        )
+        net_debit = buy_notional - sell_notional
+        synthetic_side = 'BUY' if net_debit >= ZERO else 'SELL'
+        price = (abs(net_debit) / spread_qty) if spread_qty > ZERO else ZERO
+
     display_symbol = 'SPREAD(' + ','.join(symbols) + ')'
     first_fill = ordered[0]
-    buy_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'BUY'), ZERO)
-    sell_qty = sum((_to_decimal(fill.quantity) for fill in ordered if (fill.side or '').upper() == 'SELL'), ZERO)
-    spread_qty = max(buy_qty, sell_qty)
-    if spread_qty <= ZERO:
-        spread_qty = max((_to_decimal(fill.quantity) for fill in ordered), default=ZERO)
-
-    buy_notional = sum(
-        (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'BUY'),
-        ZERO,
-    )
-    sell_notional = sum(
-        (_to_decimal(fill.quantity) * _to_decimal(fill.price) for fill in ordered if (fill.side or '').upper() == 'SELL'),
-        ZERO,
-    )
-    net_debit = buy_notional - sell_notional
-    synthetic_side = 'BUY' if net_debit >= ZERO else 'SELL'
-    price = (abs(net_debit) / spread_qty) if spread_qty > ZERO else ZERO
 
     return SyntheticSpreadFill(
         symbol=display_symbol,

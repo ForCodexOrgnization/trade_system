@@ -21,6 +21,15 @@ def _trade_matched_lot_table_exists():
         return TradeMatchedLot._meta.db_table in connection.introspection.table_names(cursor)
 
 
+def _spread_leg_symbols(symbol):
+    if not symbol:
+        return []
+    text = str(symbol).strip()
+    if not (text.startswith('SPREAD(') and text.endswith(')')):
+        return []
+    return [item.strip() for item in text[len('SPREAD('):-1].split(',') if item.strip()]
+
+
 def _trade_review_column_exists(column_name):
     from apps.journal.models import TradeReview
     table_name = TradeReview._meta.db_table
@@ -95,7 +104,11 @@ class TradeGroupSerializer(serializers.ModelSerializer):
                 lot_query |= Q(symbol=obj.symbol, executed_at=lot.closed_at, side=close_side, price=lot.close_price)
             return RawIBKRExecution.objects.filter(lot_query).order_by('executed_at', 'id')
 
-        qs = RawIBKRExecution.objects.filter(symbol=obj.symbol)
+        leg_symbols = _spread_leg_symbols(obj.symbol)
+        if leg_symbols:
+            qs = RawIBKRExecution.objects.filter(symbol__in=leg_symbols)
+        else:
+            qs = RawIBKRExecution.objects.filter(symbol=obj.symbol)
         if obj.opened_at:
             qs = qs.filter(executed_at__gte=obj.opened_at)
         if obj.closed_at:
@@ -114,7 +127,11 @@ class TradeGroupSerializer(serializers.ModelSerializer):
                 lot_query |= Q(symbol=obj.symbol, executed_at=lot.closed_at, side=close_side, price=lot.close_price)
             return TradeFill.objects.filter(lot_query).order_by('executed_at', 'id')
 
-        qs = TradeFill.objects.filter(symbol=obj.symbol)
+        leg_symbols = _spread_leg_symbols(obj.symbol)
+        if leg_symbols:
+            qs = TradeFill.objects.filter(symbol__in=leg_symbols)
+        else:
+            qs = TradeFill.objects.filter(symbol=obj.symbol)
         if obj.opened_at:
             qs = qs.filter(executed_at__gte=obj.opened_at)
         if obj.closed_at:

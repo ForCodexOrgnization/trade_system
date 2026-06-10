@@ -50,9 +50,9 @@ class SpreadAggregationTests(SimpleTestCase):
         spread = prepared[0]
         self.assertIsInstance(spread, SyntheticSpreadFill)
         self.assertEqual(spread.symbol, 'SPREAD(MCLM6,MCLN6)')
-        self.assertEqual(spread.side, 'BUY')
+        self.assertEqual(spread.side, 'SELL')
         self.assertEqual(spread.quantity, Decimal('6'))
-        self.assertEqual(spread.price, Decimal('1'))
+        self.assertEqual(spread.price, Decimal('-1'))
         self.assertEqual(spread.spread_leg_count, 2)
 
     def test_standalone_partial_fills_are_not_collapsed(self):
@@ -185,6 +185,59 @@ class SpreadAggregationTests(SimpleTestCase):
 
         self.assertEqual(len(prepared), 1)
         self.assertIsInstance(prepared[0], SyntheticSpreadFill)
+
+
+    def test_fallback_spread_side_uses_canonical_leg_not_net_debit(self):
+        executed_at = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)
+        rows = [
+            self._fill(
+                fill_id=1,
+                order_id='leg-a',
+                symbol='MCLN6',
+                side='BUY',
+                quantity='4',
+                price='62.90',
+                executed_at=executed_at,
+                raw_payload={
+                    'assetCategory': 'FUT',
+                    'underlyingSymbol': 'MCL',
+                    'orderTime': '20260514;144804',
+                    'ibExecID': '000100f5.6a0509a5.02.01',
+                },
+            ),
+            self._fill(
+                fill_id=2,
+                order_id='leg-b',
+                symbol='MCLQ6',
+                side='SELL',
+                quantity='4',
+                price='63.00',
+                executed_at=executed_at,
+                raw_payload={
+                    'assetCategory': 'FUT',
+                    'underlyingSymbol': 'MCL',
+                    'orderTime': '20260514;144804',
+                    'ibExecID': '000100f5.6a0509a5.03.01',
+                },
+            ),
+        ]
+
+        prepared = _prepare_rebuild_fills(rows)
+
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0].side, 'BUY')
+        self.assertEqual(prepared[0].quantity, Decimal('4'))
+        self.assertEqual(prepared[0].price, Decimal('-0.10'))
+
+    def test_order_spread_requires_balanced_two_leg_calendar_shape(self):
+        rows = [
+            self._fill(fill_id=1, order_id='500', symbol='MCLN6', side='BUY', quantity='4', price='62.90'),
+            self._fill(fill_id=2, order_id='500', symbol='MCLQ6', side='SELL', quantity='6', price='63.00'),
+        ]
+
+        prepared = _prepare_rebuild_fills(rows)
+
+        self.assertEqual(prepared, rows)
 
     def test_fallback_does_not_collapse_normal_futures_orders(self):
         executed_at = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)
