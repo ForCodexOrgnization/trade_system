@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.db import connection
@@ -195,6 +196,153 @@ def _raw_order_combo_key(fill):
     return f"{account}|order|{order_id}"
 
 
+def _payload_value(fill, *names):
+    raw_execution = getattr(fill, 'raw_execution', None)
+    payload = getattr(raw_execution, 'raw_payload', None) or {}
+    for name in names:
+        if raw_execution is not None and hasattr(raw_execution, name):
+            value = getattr(raw_execution, name)
+            if value not in (None, ''):
+                return value
+        value = payload.get(name)
+        if value not in (None, ''):
+            return value
+    return ''
+
+
+def _is_futures_fill(fill):
+    asset_class = (getattr(fill, 'asset_class', None) or '').upper()
+    sec_type = str(_payload_value(fill, 'sec_type', 'assetCategory')).upper()
+    return asset_class == 'FUT' or sec_type == 'FUT'
+
+
+def _fallback_underlying_symbol(fill):
+    return str(_payload_value(fill, 'underlyingSymbol')).strip().upper()
+
+
+def _fallback_execution_prefix(fill):
+    execution_id = str(_payload_value(fill, 'execution_id', 'ibExecID')).strip()
+    if not execution_id:
+        return ''
+    parts = execution_id.split('.')
+    if len(parts) < 3:
+        return ''
+    return '.'.join(parts[:-2])
+
+
+def _fallback_rtn_key(fill):
+    rtn = str(_payload_value(fill, 'rtn')).strip()
+    parts = rtn.split('.')
+    if len(parts) < 4 or not all(parts[index] for index in (0, 2, 3)):
+        return ''
+    return '.'.join((parts[0], parts[2], parts[3]))
+
+
+def _parse_ibkr_time(value):
+    if value in (None, ''):
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    for fmt in ('%Y%m%d;%H%M%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
+        try:
+            return datetime.strptime(text[:19], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _seconds_apart(left, right):
+    if left is None or right is None:
+        return None
+    if timezone.is_aware(left):
+        left = timezone.make_naive(left, dt_timezone.utc)
+    if timezone.is_aware(right):
+        right = timezone.make_naive(right, dt_timezone.utc)
+    return abs((left - right).total_seconds())
+
+
+def _times_close(left, right, *, tolerance=timedelta(seconds=2)):
+    seconds = _seconds_apart(left, right)
+    return seconds is not None and seconds <= tolerance.total_seconds()
+
+
+def _order_times_close(left_fill, right_fill):
+    left_order_time = _parse_ibkr_time(_payload_value(left_fill, 'orderTime'))
+    right_order_time = _parse_ibkr_time(_payload_value(right_fill, 'orderTime'))
+    if left_order_time is None and right_order_time is None:
+        return True
+    return _times_close(left_order_time, right_order_time)
+
+
+def _looks_like_futures_calendar_spread_pair(left_fill, right_fill):
+    if not (_is_futures_fill(left_fill) and _is_futures_fill(right_fill)):
+        return False
+
+    left_underlying = _fallback_underlying_symbol(left_fill)
+    right_underlying = _fallback_underlying_symbol(right_fill)
+    if not left_underlying or left_underlying != right_underlying:
+        return False
+
+    left_symbol = getattr(left_fill, 'symbol', None) or ''
+    right_symbol = getattr(right_fill, 'symbol', None) or ''
+    if left_symbol == right_symbol:
+        return False
+
+    left_side = (getattr(left_fill, 'side', None) or '').upper()
+    right_side = (getattr(right_fill, 'side', None) or '').upper()
+    if {left_side, right_side} != {'BUY', 'SELL'}:
+        return False
+
+    left_qty = abs(_to_decimal(getattr(left_fill, 'quantity', ZERO)))
+    right_qty = abs(_to_decimal(getattr(right_fill, 'quantity', ZERO)))
+    if left_qty != right_qty:
+        return False
+
+    if not _times_close(
+        getattr(left_fill, 'executed_at', None),
+        getattr(right_fill, 'executed_at', None),
+    ):
+        return False
+
+    if not _order_times_close(left_fill, right_fill):
+        return False
+
+    return True
+
+
+def _fallback_spread_group_key(fill):
+    if not _is_futures_fill(fill):
+        return ''
+    underlying = _fallback_underlying_symbol(fill)
+    if not underlying:
+        return ''
+    account = getattr(getattr(fill, 'raw_execution', None), 'account', None) or ''
+    execution_prefix = _fallback_execution_prefix(fill)
+    if execution_prefix:
+        return f'{account}|fallback_exec|{underlying}|{execution_prefix}'
+    rtn_key = _fallback_rtn_key(fill)
+    if rtn_key:
+        return f'{account}|fallback_rtn|{underlying}|{rtn_key}'
+    return ''
+
+
+def _collect_fallback_spread_keys(fills):
+    candidates = defaultdict(list)
+    for fill in fills:
+        key = _fallback_spread_group_key(fill)
+        if key:
+            candidates[key].append(fill)
+
+    spread_keys = set()
+    for key, key_fills in candidates.items():
+        if len(key_fills) != 2:
+            continue
+        if _looks_like_futures_calendar_spread_pair(key_fills[0], key_fills[1]):
+            spread_keys.add(key)
+    return spread_keys
+
+
 def _leg_identity(fill):
     raw_execution = getattr(fill, 'raw_execution', None)
     conid = getattr(raw_execution, 'conid', None) if raw_execution is not None else None
@@ -258,14 +406,17 @@ def _build_synthetic_spread_fill(spread_key, key_fills):
 
 def _prepare_rebuild_fills(fills):
     spread_order_keys = _collect_spread_order_keys(fills)
-    if not spread_order_keys:
+    fallback_spread_keys = _collect_fallback_spread_keys(fills)
+    if not spread_order_keys and not fallback_spread_keys:
         return fills
 
     normal_fills = []
     spread_fills_by_order = defaultdict(list)
     for fill in fills:
         spread_key = _raw_order_combo_key(fill)
-        if spread_key in spread_order_keys:
+        if spread_key not in spread_order_keys:
+            spread_key = _fallback_spread_group_key(fill)
+        if spread_key in spread_order_keys or spread_key in fallback_spread_keys:
             spread_fills_by_order[spread_key].append(fill)
         else:
             normal_fills.append(fill)
