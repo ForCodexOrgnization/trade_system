@@ -325,6 +325,61 @@ class SpreadAggregationTests(SimpleTestCase):
         self.assertEqual(bucket['total_sell_qty'], Decimal('1'))
         self.assertEqual(bucket['open_qty'], Decimal('0'))
 
+    def test_cross_calendar_spread_rolls_close_when_leg_exposure_is_flat(self):
+        first_time = datetime(2026, 5, 7, 6, 42, 45, tzinfo=timezone.utc)
+        second_time = datetime(2026, 5, 14, 10, 33, 41, tzinfo=timezone.utc)
+        third_time = datetime(2026, 5, 14, 10, 27, 13, tzinfo=timezone.utc)
+        rows = [
+            SyntheticSpreadFill(
+                symbol='SPREAD(MCLM6,MCLN6)',
+                asset_class='FUT',
+                side='SELL',
+                quantity=Decimal('4'),
+                price=Decimal('0.10'),
+                commission=Decimal('1.00'),
+                executed_at=first_time,
+                raw_execution=SimpleNamespace(account='DU123'),
+                id=1,
+                spread_symbols=('MCLM6', 'MCLN6'),
+            ),
+            SyntheticSpreadFill(
+                symbol='SPREAD(MCLM6,MCLQ6)',
+                asset_class='FUT',
+                side='BUY',
+                quantity=Decimal('4'),
+                price=Decimal('0.20'),
+                commission=Decimal('1.00'),
+                executed_at=second_time,
+                raw_execution=SimpleNamespace(account='DU123'),
+                id=2,
+                spread_symbols=('MCLM6', 'MCLQ6'),
+            ),
+            SyntheticSpreadFill(
+                symbol='SPREAD(MCLN6,MCLQ6)',
+                asset_class='FUT',
+                side='SELL',
+                quantity=Decimal('4'),
+                price=Decimal('0.05'),
+                commission=Decimal('1.00'),
+                executed_at=third_time,
+                raw_execution=SimpleNamespace(account='DU123'),
+                id=3,
+                spread_symbols=('MCLN6', 'MCLQ6'),
+            ),
+        ]
+
+        buckets = _build_trade_buckets(rows)
+
+        self.assertEqual(len(buckets), 1)
+        bucket = buckets[0]
+        self.assertEqual(bucket['symbol'], 'SPREAD(MCLM6,MCLN6,MCLQ6)')
+        self.assertEqual(bucket['status'], 'closed')
+        self.assertEqual(bucket['open_qty'], Decimal('0'))
+        self.assertEqual(bucket['net_qty'], Decimal('0'))
+        self.assertEqual(bucket['total_buy_qty'], Decimal('4'))
+        self.assertEqual(bucket['total_sell_qty'], Decimal('8'))
+
+
     def test_fallback_does_not_collapse_normal_futures_orders(self):
         executed_at = datetime(2026, 5, 14, 14, 48, 4, tzinfo=timezone.utc)
         rows = [

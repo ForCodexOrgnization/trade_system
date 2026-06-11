@@ -177,6 +177,33 @@ def _build_position_group_key(fill):
     return (account or '', fill.symbol or '', fill.asset_class or '')
 
 
+def _spread_underlying_from_symbols(symbols):
+    prefixes = []
+    for symbol in symbols:
+        text = str(symbol or '').strip().upper()
+        prefix = ''.join(char for char in text if char.isalpha())
+        if not prefix:
+            return ''
+        prefixes.append(prefix)
+    if not prefixes:
+        return ''
+
+    common = prefixes[0]
+    for prefix in prefixes[1:]:
+        while common and not prefix.startswith(common):
+            common = common[:-1]
+    return common
+
+
+def _build_spread_vector_group_key(fill):
+    account = getattr(fill.raw_execution, 'account', None) if getattr(fill, 'raw_execution', None) else None
+    symbols = tuple(getattr(fill, 'spread_symbols', ()) or ())
+    underlying = _spread_underlying_from_symbols(symbols)
+    if not underlying:
+        underlying = fill.symbol or ''
+    return (account or '', underlying, fill.asset_class or '')
+
+
 def _display_symbol_for_bucket(fills):
     symbols = sorted({(fill.symbol or '').strip() for fill in fills if (fill.symbol or '').strip()})
     if len(symbols) <= 1:
@@ -595,10 +622,161 @@ def _finalize_bucket(bucket, *, force_open=False):
     }
 
 
-def _build_trade_buckets(fills):
+def _is_spread_vector_flat(leg_positions):
+    return all(qty == ZERO for qty in leg_positions.values())
+
+
+def _spread_leg_delta(fill):
+    symbols = tuple(getattr(fill, 'spread_symbols', ()) or ())
+    if len(symbols) != 2:
+        return {}
+    qty = _to_decimal(getattr(fill, 'quantity', ZERO))
+    if qty <= ZERO:
+        return {}
+    side = (getattr(fill, 'side', None) or '').upper()
+    if side == 'BUY':
+        return {symbols[0]: qty, symbols[1]: -qty}
+    if side == 'SELL':
+        return {symbols[0]: -qty, symbols[1]: qty}
+    return {}
+
+
+def _new_spread_vector_bucket(fill):
+    return {
+        'symbol': fill.symbol,
+        'asset_class': fill.asset_class,
+        'opened_at': fill.executed_at,
+        'closed_at': None,
+        'last_fill_at': fill.executed_at,
+        'direction': 'long' if (fill.side or '').upper() == 'BUY' else 'short',
+        'leg_positions': defaultdict(Decimal),
+        'symbols': set(getattr(fill, 'spread_symbols', ()) or ()),
+        'buy_qty': ZERO,
+        'buy_notional': ZERO,
+        'sell_qty': ZERO,
+        'sell_notional': ZERO,
+        'commission_total': ZERO,
+        'cashflow': ZERO,
+        'multiplier': _extract_multiplier(fill),
+    }
+
+
+def _apply_spread_vector_fill(bucket, fill):
+    qty = _to_decimal(fill.quantity)
+    if qty <= ZERO:
+        return
+
+    side = (fill.side or '').upper()
+    price = _to_decimal(fill.price)
+    notional = qty * price
+    bucket['last_fill_at'] = fill.executed_at
+    bucket['commission_total'] += _to_decimal(fill.commission)
+    bucket['symbols'].update(getattr(fill, 'spread_symbols', ()) or ())
+
+    if side == 'BUY':
+        bucket['buy_qty'] += qty
+        bucket['buy_notional'] += notional
+        bucket['cashflow'] -= notional
+    elif side == 'SELL':
+        bucket['sell_qty'] += qty
+        bucket['sell_notional'] += notional
+        bucket['cashflow'] += notional
+    else:
+        return
+
+    for symbol, delta in _spread_leg_delta(fill).items():
+        bucket['leg_positions'][symbol] += delta
+
+
+def _finalize_spread_vector_bucket(bucket, *, force_open=False):
+    flat = _is_spread_vector_flat(bucket['leg_positions'])
+    is_closed = flat and not force_open
+    status = 'closed' if is_closed else 'open'
+    symbols = tuple(sorted(symbol for symbol in bucket['symbols'] if symbol))
+    display_symbol = 'SPREAD(' + ','.join(symbols) + ')' if symbols else bucket['symbol']
+    net_qty = sum(bucket['leg_positions'].values(), ZERO)
+    gross_open_qty = sum((abs(qty) for qty in bucket['leg_positions'].values()), ZERO) / Decimal('2')
+
+    avg_buy_price = (bucket['buy_notional'] / bucket['buy_qty']) if bucket['buy_qty'] > ZERO else None
+    avg_sell_price = (bucket['sell_notional'] / bucket['sell_qty']) if bucket['sell_qty'] > ZERO else None
+    if status == 'closed':
+        avg_open_cost = None
+        open_qty = ZERO
+    else:
+        avg_open_cost = avg_buy_price or avg_sell_price
+        open_qty = net_qty if net_qty != ZERO else gross_open_qty
+
+    realized_pnl = bucket['cashflow'] * bucket['multiplier'] if is_closed else ZERO
+
+    return {
+        'symbol': display_symbol,
+        'asset_class': bucket['asset_class'],
+        'total_buy_qty': bucket['buy_qty'],
+        'total_sell_qty': bucket['sell_qty'],
+        'buy_notional': bucket['buy_notional'],
+        'sell_notional': bucket['sell_notional'],
+        'net_qty': net_qty,
+        'avg_open_cost': avg_open_cost,
+        'open_qty': open_qty,
+        'realized_pnl': realized_pnl,
+        'commission_total': bucket['commission_total'],
+        'opened_at': bucket['opened_at'],
+        'closed_at': bucket['last_fill_at'] if is_closed else None,
+        'last_fill_at': bucket['last_fill_at'],
+        'direction': bucket['direction'],
+        'status': status,
+        'lot_snapshots': [
+            {
+                'open_qty': open_qty,
+                'remaining_qty': abs(open_qty),
+                'open_price': avg_open_cost,
+                'opened_at': bucket['opened_at'],
+            }
+        ]
+        if status != 'closed' and avg_open_cost is not None and open_qty != ZERO
+        else [],
+        'matched_lots': [],
+    }
+
+
+def _build_spread_vector_buckets(fills):
     trade_buckets = []
     fills_by_position_key = defaultdict(list)
     for fill in fills:
+        fills_by_position_key[_build_spread_vector_group_key(fill)].append(fill)
+
+    for key_fills in fills_by_position_key.values():
+        current_bucket = None
+        ordered_fills = sorted(key_fills, key=lambda item: (item.executed_at, item.id))
+        for fill in ordered_fills:
+            if not _spread_leg_delta(fill):
+                continue
+            if current_bucket is None:
+                current_bucket = _new_spread_vector_bucket(fill)
+            _apply_spread_vector_fill(current_bucket, fill)
+            if _is_spread_vector_flat(current_bucket['leg_positions']):
+                trade_buckets.append(_finalize_spread_vector_bucket(current_bucket))
+                current_bucket = None
+        if current_bucket is not None:
+            trade_buckets.append(_finalize_spread_vector_bucket(current_bucket, force_open=True))
+    return trade_buckets
+
+
+def _build_trade_buckets(fills):
+    trade_buckets = []
+    spread_vector_fills = []
+    scalar_fills = []
+    for fill in fills:
+        if isinstance(fill, SyntheticSpreadFill) and len(getattr(fill, 'spread_symbols', ()) or ()) == 2:
+            spread_vector_fills.append(fill)
+        else:
+            scalar_fills.append(fill)
+
+    if spread_vector_fills:
+        trade_buckets.extend(_build_spread_vector_buckets(spread_vector_fills))
+
+    fills_by_position_key = defaultdict(list)
+    for fill in scalar_fills:
         key = _build_position_group_key(fill)
         fills_by_position_key[key].append(fill)
 
