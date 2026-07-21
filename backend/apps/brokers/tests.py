@@ -1,9 +1,13 @@
 from tempfile import TemporaryDirectory
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from contextlib import nullcontext
 
 from django.test import SimpleTestCase, override_settings
 
 from .ibkr_client import IBKRClient
+from .services import IBKRSyncService
 
 
 FLEX_XML = '''<FlexQueryResponse><FlexStatements><FlexStatement><Trades>
@@ -44,3 +48,57 @@ class IBKRClientLocalCacheTests(SimpleTestCase):
             self.assertFalse(client.has_flex_statement_cache)
             with self.assertRaises(FileNotFoundError):
                 client.fetch_all_executions()
+
+
+class IBKRSyncServiceTests(SimpleTestCase):
+    def test_sync_records_accounts_returned_by_the_flex_report(self):
+        class Client:
+            def fetch_all_executions(self):
+                return [
+                    {
+                        'execution_id': 'exec-1',
+                        'account': 'DU456',
+                        'symbol': 'MCLN6',
+                        'sec_type': 'FUT',
+                        'side': 'BUY',
+                        'quantity': '1',
+                        'price': '90',
+                        'commission': '1',
+                        'executed_at': '20260306;142202',
+                    },
+                    {
+                        'execution_id': 'exec-2',
+                        'account': 'DU123',
+                        'symbol': 'MCLN6',
+                        'sec_type': 'FUT',
+                        'side': 'SELL',
+                        'quantity': '1',
+                        'price': '91',
+                        'commission': '1',
+                        'executed_at': '20260306;142203',
+                    },
+                ]
+
+        job = SimpleNamespace(
+            metadata={},
+            raw_count=0,
+            error_count=0,
+            error_message=None,
+            inserted_count=0,
+            duplicate_count=0,
+            status='running',
+            save=lambda **kwargs: None,
+        )
+        raw_execution = SimpleNamespace(trade_date=None)
+
+        with (
+            patch.object(IBKRSyncService, '_build_pre_sync_snapshot', return_value={}),
+            patch('apps.brokers.services.transaction.atomic', side_effect=nullcontext),
+            patch('apps.brokers.services.RawIBKRExecution.objects.create', return_value=raw_execution),
+            patch('apps.brokers.services.create_fill_from_raw'),
+            patch('apps.brokers.services.rebuild_trade_groups_for_dates'),
+        ):
+            result = IBKRSyncService(client=Client()).run_full_sync(job)
+
+        self.assertEqual(job.metadata['accounts'], ['DU123', 'DU456'])
+        self.assertEqual(result['accounts'], ['DU123', 'DU456'])
