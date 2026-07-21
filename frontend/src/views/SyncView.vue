@@ -16,6 +16,7 @@
       <p v-if="configStatus" :class="['muted-copy', localCacheExists ? 'pnl-positive' : 'pnl-negative']">
         Local XML cache: {{ localCacheExists ? 'Ready' : 'Missing — run Start Real IBKR Sync once first' }}
       </p>
+      <p class="muted-copy">切换 IBKR Flex Token/Query 只会决定下一次同步的数据来源，不会删除本地已导入的历史账户数据；请通过 Dashboard 的 Account 筛选查看指定账户。</p>
     </div>
 
     <div v-if="result" class="card success-box">
@@ -25,6 +26,7 @@
       <p><strong>Inserted:</strong> {{ result.result.inserted_count }}</p>
       <p><strong>Duplicates:</strong> {{ result.result.duplicate_count }}</p>
       <p><strong>Errors:</strong> {{ result.result.error_count }}</p>
+      <p><strong>Accounts:</strong> {{ formatAccounts(result.result.accounts) }}</p>
       <p><strong>Touched Dates:</strong> {{ result.result.touched_trade_dates.join(', ') }}</p>
     </div>
 
@@ -36,6 +38,7 @@
             <th>ID</th>
             <th>Status</th>
             <th>Type</th>
+            <th>Accounts</th>
             <th>Raw</th>
             <th>Inserted</th>
             <th>Duplicates</th>
@@ -48,6 +51,7 @@
             <td>{{ job.id }}</td>
             <td><span :class="['badge', job.status]">{{ job.status }}</span></td>
             <td>{{ job.job_type }}</td>
+            <td>{{ formatAccounts(job.metadata?.accounts) }}</td>
             <td>{{ job.raw_count }}</td>
             <td>{{ job.inserted_count }}</td>
             <td>{{ job.duplicate_count }}</td>
@@ -55,7 +59,7 @@
             <td>{{ formatDate(job.created_at) }}</td>
           </tr>
           <tr v-if="!jobs.length">
-            <td colspan="8" class="empty-row">No sync jobs yet.</td>
+            <td colspan="9" class="empty-row">No sync jobs yet.</td>
           </tr>
         </tbody>
       </table>
@@ -81,6 +85,10 @@ const localCacheExists = computed(() => Boolean(configStatus.value?.local_flex_x
 
 function formatDate(v) {
   return new Date(v).toLocaleString()
+}
+
+function formatAccounts(accounts) {
+  return Array.isArray(accounts) && accounts.length ? accounts.join(', ') : '—'
 }
 
 async function loadJobs(nextPage = 1) {
