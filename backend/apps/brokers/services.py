@@ -86,8 +86,13 @@ class IBKRSyncService:
         sync_job.save(update_fields=['metadata', 'updated_at'])
 
         rows = self.client.fetch_all_executions()
+        accounts = sorted({str(row.get('account')).strip() for row in rows if row.get('account')})
+        sync_job.metadata = {
+            **(sync_job.metadata or {}),
+            'accounts': accounts,
+        }
         sync_job.raw_count = len(rows)
-        sync_job.save(update_fields=['raw_count', 'updated_at'])
+        sync_job.save(update_fields=['metadata', 'raw_count', 'updated_at'])
 
         inserted = 0
         duplicate_count = 0
@@ -125,5 +130,6 @@ class IBKRSyncService:
             'inserted_count': inserted,
             'duplicate_count': duplicate_count,
             'error_count': sync_job.error_count,
+            'accounts': accounts,
             'touched_trade_dates': [str(x) for x in sorted(touched_trade_dates)],
         }
