@@ -7,6 +7,8 @@ from rest_framework.generics import ListAPIView
 
 from apps.brokers.ibkr_client import IBKRClient
 from apps.brokers.services import IBKRSyncService
+from apps.trades.models import RawIBKRExecution
+from apps.trades.services import rebuild_all_trade_groups
 from .models import SyncJob
 from .serializers import SyncJobSerializer
 
