@@ -4,7 +4,6 @@ import TradesView from '../views/TradesView.vue'
 import TradeDetailView from '../views/TradeDetailView.vue'
 import RawExecutionsView from '../views/RawExecutionsView.vue'
 import DailyReviewView from '../views/DailyReviewView.vue'
-import SyncView from '../views/SyncView.vue'
 import SettingsView from '../views/SettingsView.vue'
 
 const routes = [
@@ -15,7 +14,7 @@ const routes = [
   { path: '/daily-review', redirect: '/journal' },
   { path: '/journal', name: 'journal', component: DailyReviewView },
   { path: '/reports/monthly', redirect: '/' },
-  { path: '/sync', name: 'sync', component: SyncView },
+  { path: '/sync', redirect: '/settings' },
   { path: '/settings', name: 'settings', component: SettingsView },
 ]
 

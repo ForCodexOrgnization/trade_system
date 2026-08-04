@@ -16,7 +16,6 @@
         <router-link to="/trades">Trades</router-link>
         <router-link to="/executions">Executions</router-link>
         <router-link to="/journal">Journal</router-link>
-        <router-link to="/sync">Sync</router-link>
         <router-link to="/settings">Settings</router-link>
       </div>
     </div>

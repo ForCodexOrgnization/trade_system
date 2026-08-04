@@ -88,6 +88,8 @@
         </div>
       </div>
 
+      <AccountSyncPanel />
+
       <div class="card settings-card">
         <div class="section-title">Dashboard Defaults</div>
         <div class="settings-form-grid">
@@ -216,6 +218,7 @@ import {
 import { createMistakeTag, deleteMistakeTag, fetchMistakeTags, updateMistakeTag } from '../api/journal'
 import { responseRows } from '../api/pagination'
 import { refreshAccounts } from '../state/accounts'
+import AccountSyncPanel from '../components/AccountSyncPanel.vue'
 
 const config = ref(null)
 const tabs = ref([])
