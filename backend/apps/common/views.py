@@ -5,13 +5,12 @@ from rest_framework.exceptions import APIException
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.views import APIView
 from django.utils import timezone
 
 from apps.brokers.ibkr_client import IBKRClient
 
-from .models import BrokerAccount, DashboardPreference, DashboardTab, StrategyOption
-from .serializers import BrokerAccountSerializer, DashboardPreferenceSerializer, DashboardTabSerializer, StrategyOptionSerializer
+from .models import BrokerAccount, DashboardTab, StrategyOption
+from .serializers import BrokerAccountSerializer, DashboardTabSerializer, StrategyOptionSerializer
 
 DEFAULT_WIDGETS = [
     "overviewCards",
@@ -117,26 +116,6 @@ class DashboardTabViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         max_order = DashboardTab.objects.aggregate(value=Max("sort_order")).get("value") or 0
         serializer.save(sort_order=max_order + 1)
-
-
-class DashboardPreferenceAPIView(APIView):
-    def get(self, request):
-        default_tab = ensure_default_tab()
-        pref = DashboardPreference.get_solo()
-        if pref.default_dashboard_tab is None:
-            pref.default_dashboard_tab = default_tab
-            pref.save(update_fields=["default_dashboard_tab", "updated_at"])
-        serializer = DashboardPreferenceSerializer(pref)
-        return Response(serializer.data)
-
-    def put(self, request):
-        pref = DashboardPreference.get_solo()
-        serializer = DashboardPreferenceSerializer(pref, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    patch = put
 
 
 class StrategyOptionViewSet(viewsets.ModelViewSet):

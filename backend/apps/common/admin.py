@@ -1,5 +1,4 @@
 from django.contrib import admin
-from .models import DashboardPreference, DashboardTab
+from .models import DashboardTab
 
 admin.site.register(DashboardTab)
-admin.site.register(DashboardPreference)

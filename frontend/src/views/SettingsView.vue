@@ -9,31 +9,6 @@
     </div>
 
     <div class="settings-grid">
-      <div class="card settings-card">
-        <div class="section-title">Legacy IBKR Flex Connection</div>
-        <div class="settings-status-grid">
-          <div class="settings-status-item">
-            <div class="settings-status-label">Token</div>
-            <div :class="['settings-status-value', config?.token_exists ? 'ok' : 'bad']">{{ config?.token_exists ? 'Configured' : 'Missing' }}</div>
-          </div>
-          <div class="settings-status-item">
-            <div class="settings-status-label">Query ID</div>
-            <div :class="['settings-status-value', config?.query_id_exists ? 'ok' : 'bad']">{{ config?.query_id_exists ? 'Configured' : 'Missing' }}</div>
-          </div>
-          <div class="settings-status-item">
-            <div class="settings-status-label">Ready</div>
-            <div :class="['settings-status-value', ready ? 'ok' : 'bad']">{{ ready ? 'Ready to sync' : 'Needs attention' }}</div>
-          </div>
-        </div>
-        <div class="settings-copy">
-          <div><strong>Token Preview:</strong> {{ config?.token_preview || '-' }}</div>
-          <div><strong>Query ID:</strong> {{ config?.query_id || '-' }}</div>
-        </div>
-        <div class="settings-actions">
-          <button @click="loadConfigStatus">Refresh Status</button>
-        </div>
-      </div>
-
       <div class="card settings-card account-settings-card">
         <div class="section-title">Trading Accounts</div>
         <div class="settings-copy muted-copy">
@@ -88,36 +63,9 @@
         </div>
       </div>
 
-      <div class="card settings-card">
-        <div class="section-title">Dashboard Defaults</div>
-        <div class="settings-form-grid">
-          <label>
-            <span>Default Dashboard Tab</span>
-            <select v-model="form.default_dashboard_tab">
-              <option :value="null">System default</option>
-              <option v-for="tab in tabs" :key="tab.id" :value="tab.id">{{ tab.name }}</option>
-            </select>
-          </label>
-          <label>
-            <span>Default Date Range</span>
-            <select v-model="form.default_date_range">
-              <option value="all">All</option>
-              <option value="7d">7D</option>
-              <option value="30d">30D</option>
-              <option value="mtd">MTD</option>
-              <option value="ytd">YTD</option>
-            </select>
-          </label>
-        </div>
-        <div class="settings-copy muted-copy">
-          这些默认值会存到后端数据库，Dashboard 首次打开时会优先使用这里的配置。
-        </div>
-        <div class="settings-actions">
-          <button @click="saveDefaults" :disabled="saving">{{ saving ? 'Saving...' : 'Save Defaults' }}</button>
-        </div>
-      </div>
+      <AccountSyncPanel />
 
-      <div class="card settings-card">
+      <div class="card settings-card compact-config-card">
         <div class="section-title">Journal Strategies</div>
         <div class="settings-copy muted-copy">用于 Journal 的 Strategy 下拉配置。可调整排序、启用/停用、增删。</div>
         <div class="settings-form-grid strategy-settings-grid">
@@ -130,20 +78,18 @@
           </div>
         </div>
 
-        <div class="strategy-list">
-          <div v-for="item in strategyOptions" :key="item.id" class="strategy-row">
-            <div class="strategy-main-group">
-              <input v-model.trim="item.name" type="text" placeholder="Strategy name" />
-              <label class="strategy-order-group">
-                <span>Order</span>
-                <input v-model.number="item.sort_order" type="number" min="0" />
-              </label>
-            </div>
-            <label class="strategy-toggle">
-              <input v-model="item.is_active" type="checkbox" />
-              Active
+        <div class="strategy-list compact-config-list">
+          <div v-for="item in strategyOptions" :key="item.id" class="compact-config-row strategy-compact-row">
+            <input v-model.trim="item.name" class="compact-name-input" type="text" placeholder="Strategy name" />
+            <label class="compact-order-field">
+              <span>Order</span>
+              <input v-model.number="item.sort_order" type="number" min="0" />
             </label>
-            <div class="strategy-actions-fixed">
+            <label class="compact-active-toggle">
+              <input v-model="item.is_active" type="checkbox" />
+              <span>Active</span>
+            </label>
+            <div class="compact-row-actions">
               <button class="secondary small-btn" @click="saveStrategy(item)">Save</button>
               <button class="secondary small-btn" @click="removeStrategy(item.id)">Delete</button>
             </div>
@@ -152,7 +98,7 @@
         </div>
       </div>
 
-      <div class="card settings-card">
+      <div class="card settings-card compact-config-card">
         <div class="section-title">Mistake Tags</div>
         <div class="settings-copy muted-copy">配置 Trade Review / Daily Review 中的 Mistake Tags，支持新增、编辑、删除。</div>
         <div class="settings-form-grid strategy-settings-grid">
@@ -164,12 +110,10 @@
             <button @click="addMistakeTag" :disabled="!newMistakeTagName || mistakeTagSaving">{{ mistakeTagSaving ? 'Saving...' : 'Add Tag' }}</button>
           </div>
         </div>
-        <div class="strategy-list">
-          <div v-for="item in mistakeTagOptions" :key="item.id" class="strategy-row">
-            <div class="strategy-main-group">
-              <input v-model.trim="item.name" type="text" placeholder="Mistake tag name" />
-            </div>
-            <div class="strategy-actions-fixed">
+        <div class="strategy-list compact-config-list">
+          <div v-for="item in mistakeTagOptions" :key="item.id" class="compact-config-row mistake-compact-row">
+            <input v-model.trim="item.name" class="compact-name-input" type="text" placeholder="Mistake tag name" />
+            <div class="compact-row-actions">
               <button class="secondary small-btn" @click="saveMistakeTag(item)">Save</button>
               <button class="secondary small-btn" @click="removeMistakeTag(item.id)">Delete</button>
             </div>
@@ -178,32 +122,18 @@
         </div>
       </div>
 
-      <div class="card settings-card">
-        <div class="section-title">Local Workspace</div>
-        <div class="settings-copy">
-          <p>下面这些仍然保存在浏览器本地：</p>
-          <ul class="settings-list">
-            <li>Widget visibility</li>
-            <li>Chart panel widths</li>
-            <li>Expanded filter state</li>
-            <li>Journal accordion expanded state</li>
-          </ul>
-        </div>
-        <div class="settings-actions">
-          <button class="secondary" @click="clearLocalPrefs">Clear Local UI Prefs</button>
-        </div>
-      </div>
+    </div>
+
+    <div class="settings-reset-row">
+      <span class="muted-copy">界面布局出现异常时，可恢复当前浏览器的默认布局。</span>
+      <button class="secondary" @click="resetUILayout">Reset UI Layout</button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { fetchIBKRConfigStatus } from '../api/syncs'
+import { onMounted, reactive, ref } from 'vue'
 import {
-  fetchDashboardPreferences,
-  fetchDashboardTabs,
-  saveDashboardPreferences,
   fetchStrategyOptions,
   createStrategyOption,
   updateStrategyOption,
@@ -216,12 +146,8 @@ import {
 import { createMistakeTag, deleteMistakeTag, fetchMistakeTags, updateMistakeTag } from '../api/journal'
 import { responseRows } from '../api/pagination'
 import { refreshAccounts } from '../state/accounts'
+import AccountSyncPanel from '../components/AccountSyncPanel.vue'
 
-const config = ref(null)
-const tabs = ref([])
-const saving = ref(false)
-const form = reactive({ default_dashboard_tab: null, default_date_range: 'all' })
-const ready = computed(() => Boolean(config.value?.token_exists && config.value?.query_id_exists))
 const strategyOptions = ref([])
 const strategySaving = ref(false)
 const newStrategyName = ref('')
@@ -294,33 +220,6 @@ async function toggleTradingAccount(account) {
   await Promise.all([loadBrokerAccounts(), refreshAccounts()])
 }
 
-async function loadConfigStatus() {
-  try {
-    const res = await fetchIBKRConfigStatus()
-    config.value = res.data
-  } catch {
-    config.value = { token_exists: false, query_id_exists: false, token_preview: '', query_id: '' }
-  }
-}
-async function loadDashboardSettings() {
-  const [tabRes, prefRes] = await Promise.all([fetchDashboardTabs(), fetchDashboardPreferences()])
-  tabs.value = tabRes.data?.results || tabRes.data || []
-  form.default_dashboard_tab = prefRes.data.default_dashboard_tab
-  form.default_date_range = prefRes.data.default_date_range || 'all'
-}
-async function saveDefaults() {
-  saving.value = true
-  try {
-    await saveDashboardPreferences({
-      default_dashboard_tab: form.default_dashboard_tab,
-      default_date_range: form.default_date_range,
-    })
-    alert('Dashboard defaults saved.')
-  } finally {
-    saving.value = false
-  }
-}
-
 async function loadStrategyOptions() {
   const res = await fetchStrategyOptions()
   strategyOptions.value = (res.data?.results || res.data || []).sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name))
@@ -384,17 +283,20 @@ async function removeMistakeTag(id) {
   await deleteMistakeTag(id)
   await loadMistakeTags()
 }
-function clearLocalPrefs() {
+function resetUILayout() {
   Object.keys(localStorage)
-    .filter((key) => key.startsWith('trade-dashboard-') || key.startsWith('tv-') || key.startsWith('journal-'))
+    .filter((key) => (
+      key.startsWith('trade-dashboard-')
+      || key.startsWith('ibkr-dashboard-')
+      || key.startsWith('tv-')
+      || key.startsWith('journal-')
+    ))
     .forEach((key) => localStorage.removeItem(key))
-  alert('Local UI preferences cleared.')
+  alert('UI layout reset. Reload the page to apply the default layout.')
 }
 
 onMounted(async () => {
   await Promise.all([
-    loadConfigStatus(),
-    loadDashboardSettings(),
     loadStrategyOptions(),
     loadMistakeTags(),
     loadBrokerAccounts(),
@@ -410,9 +312,33 @@ onMounted(async () => {
 .account-config-row { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
 .account-config-status, .account-config-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .account-error-copy { margin-top: 5px; color: var(--negative); font-size: 12px; }
+.compact-config-card { height: 480px; display: flex; flex-direction: column; overflow: hidden; }
+.compact-config-list { flex: 1; min-height: 0; overflow-y: auto; align-content: start; padding-right: 4px; }
+.compact-config-row { display: grid; align-items: center; gap: 8px; min-height: 52px; padding: 7px 9px; border: 1px solid #e6ecf6; border-radius: 10px; background: #fbfdff; }
+.strategy-compact-row { grid-template-columns: minmax(140px, 1fr) 104px auto auto; }
+.mistake-compact-row { grid-template-columns: minmax(160px, 1fr) auto; }
+.compact-config-row input { min-width: 0; }
+.compact-name-input, .compact-order-field input { height: 36px; padding-top: 6px; padding-bottom: 6px; }
+.compact-order-field, .compact-active-toggle, .compact-row-actions { display: flex; align-items: center; }
+.compact-order-field { gap: 6px; color: var(--tv-muted); font-size: 12px; white-space: nowrap; }
+.compact-order-field input { width: 62px; }
+.compact-active-toggle { gap: 6px; color: var(--tv-muted); font-size: 13px; white-space: nowrap; }
+.compact-active-toggle input { width: auto; }
+.compact-row-actions { justify-content: flex-end; gap: 6px; white-space: nowrap; }
+.compact-row-actions .small-btn { min-width: 62px; padding: 7px 10px; }
+.settings-reset-row { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-top: 18px; padding: 0 4px 18px; }
 @media (max-width: 980px) {
   .account-config-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .account-config-row { grid-template-columns: 1fr; }
+  .strategy-compact-row { grid-template-columns: minmax(140px, 1fr) 104px; }
+  .compact-active-toggle { grid-column: 1; }
+  .strategy-compact-row .compact-row-actions { grid-column: 2; grid-row: 2; }
 }
-@media (max-width: 620px) { .account-config-form { grid-template-columns: 1fr; } }
+@media (max-width: 620px) {
+  .account-config-form { grid-template-columns: 1fr; }
+  .compact-config-card { height: 520px; }
+  .strategy-compact-row, .mistake-compact-row { grid-template-columns: 1fr; }
+  .strategy-compact-row .compact-row-actions, .compact-active-toggle { grid-column: 1; grid-row: auto; }
+  .compact-row-actions { justify-content: flex-start; }
+}
 </style>

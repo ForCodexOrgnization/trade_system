@@ -11,7 +11,7 @@ App.vue<template>
       <div v-else-if="!activeAccountCode && !canRenderWithoutAccount" class="card account-bootstrap-card">
         <strong>No active trading account</strong>
         <div>Run an IBKR sync before opening account-scoped pages.</div>
-        <router-link to="/sync">Open Sync</router-link>
+        <router-link to="/settings">Open Settings</router-link>
       </div>
       <router-view v-else :key="`${accountVersion}:${activeAccountCode}`" />
     </main>
@@ -33,7 +33,7 @@ const {
   refreshAccounts,
 } = useAccounts()
 const route = useRoute()
-const canRenderWithoutAccount = computed(() => ['sync', 'settings'].includes(route.name))
+const canRenderWithoutAccount = computed(() => route.name === 'settings')
 
 async function retry() {
   try { await refreshAccounts() } catch {}
