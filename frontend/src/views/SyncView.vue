@@ -8,12 +8,10 @@
     <div class="card sync-action-card">
       <label class="sync-account-picker">
         <span>Sync Account</span>
-        <select v-model="selectedAccountId" :disabled="loading">
-          <option value="">Select a configured account</option>
-          <option v-for="account in activeAccounts" :key="account.id" :value="String(account.id)">
-            {{ account.display_name || account.account_code }} · {{ account.connection_status }}
-          </option>
-        </select>
+        <div class="sync-account-boundary">
+          <strong>{{ selectedAccount?.display_name || activeAccountCode || 'No active account' }}</strong>
+          <span v-if="selectedAccount">{{ selectedAccount.account_code }} · {{ selectedAccount.connection_status }}</span>
+        </div>
       </label>
       <button @click="runSync('real')" :disabled="loading || !selectedAccountConfigured">
         {{ loadingMode === 'real' ? 'Syncing from IBKR...' : 'Start Real IBKR Sync' }}
@@ -83,7 +81,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { fetchIBKRConfigStatus, fetchSyncJobs, startIBKRAccountSync } from '../api/syncs'
 import { responseCount, responseRows } from '../api/pagination'
-import { refreshAccounts } from '../state/accounts'
+import { refreshAccounts, useAccounts } from '../state/accounts'
 import { fetchBrokerAccounts } from '../api/common'
 import PaginationControls from '../components/PaginationControls.vue'
 
@@ -95,9 +93,9 @@ const jobs = ref([])
 const page = ref(1)
 const totalCount = ref(0)
 const brokerAccounts = ref([])
-const selectedAccountId = ref('')
+const { activeAccountCode } = useAccounts()
 const activeAccounts = computed(() => brokerAccounts.value.filter((account) => account.is_active))
-const selectedAccount = computed(() => activeAccounts.value.find((account) => String(account.id) === selectedAccountId.value) || null)
+const selectedAccount = computed(() => activeAccounts.value.find((account) => account.account_code === activeAccountCode.value) || null)
 const selectedAccountConfigured = computed(() => Boolean(selectedAccount.value?.token_configured && selectedAccount.value?.flex_query_id))
 const localCacheExists = computed(() => Boolean(selectedAccount.value?.local_cache_exists))
 
@@ -119,9 +117,6 @@ async function loadJobs(nextPage = 1) {
 async function loadAccounts() {
   const res = await fetchBrokerAccounts()
   brokerAccounts.value = responseRows(res.data)
-  if (!activeAccounts.value.some((account) => String(account.id) === selectedAccountId.value)) {
-    selectedAccountId.value = activeAccounts.value[0] ? String(activeAccounts.value[0].id) : ''
-  }
 }
 
 async function loadConfigStatus() {
@@ -167,4 +162,6 @@ onMounted(() => {
 
 <style scoped>
 .sync-account-picker { display: grid; gap: 6px; max-width: 420px; margin-bottom: 8px; }
+.sync-account-boundary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+.sync-account-boundary span { color: var(--muted); font-size: 13px; }
 </style>
