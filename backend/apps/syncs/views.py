@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -133,21 +132,3 @@ class StartLocalIBKRSyncAPIView(APIView):
 class SyncJobListAPIView(ListAPIView):
     queryset = SyncJob.objects.all()
     serializer_class = SyncJobSerializer
-
-
-class IBKRConfigDebugAPIView(APIView):
-    def get(self, request):
-        token = settings.IBKR_FLEX_TOKEN or ""
-        query_id = settings.IBKR_FLEX_QUERY_ID or ""
-        client = IBKRClient(use_local_flex_xml=True)
-        cache_path = client.flex_statement_cache_path
-        return Response({
-            "token_exists": bool(token),
-            "query_id_exists": bool(query_id),
-            "token_preview": f"{token[:6]}...{token[-4:]}" if len(token) >= 10 else "",
-            "query_id": query_id,
-            "history_years": settings.IBKR_FLEX_HISTORY_YEARS,
-            "send_request_url": settings.IBKR_FLEX_SEND_REQUEST_URL,
-            "local_flex_xml_cache_exists": client.has_flex_statement_cache,
-            "local_flex_xml_cache_path": str(cache_path),
-        })

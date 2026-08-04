@@ -8,4 +8,3 @@ export const startIBKRAccountSync = (accountId, useLocalFlexXml = false) => api.
   { timeout: 900000 },
 )
 export const fetchSyncJobs = (params = {}) => api.get('/syncs/jobs/', { params })
-export const fetchIBKRConfigStatus = () => api.get('/syncs/ibkr/config-debug/')

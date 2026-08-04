@@ -9,31 +9,6 @@
     </div>
 
     <div class="settings-grid">
-      <div class="card settings-card">
-        <div class="section-title">Legacy IBKR Flex Connection</div>
-        <div class="settings-status-grid">
-          <div class="settings-status-item">
-            <div class="settings-status-label">Token</div>
-            <div :class="['settings-status-value', config?.token_exists ? 'ok' : 'bad']">{{ config?.token_exists ? 'Configured' : 'Missing' }}</div>
-          </div>
-          <div class="settings-status-item">
-            <div class="settings-status-label">Query ID</div>
-            <div :class="['settings-status-value', config?.query_id_exists ? 'ok' : 'bad']">{{ config?.query_id_exists ? 'Configured' : 'Missing' }}</div>
-          </div>
-          <div class="settings-status-item">
-            <div class="settings-status-label">Ready</div>
-            <div :class="['settings-status-value', ready ? 'ok' : 'bad']">{{ ready ? 'Ready to sync' : 'Needs attention' }}</div>
-          </div>
-        </div>
-        <div class="settings-copy">
-          <div><strong>Token Preview:</strong> {{ config?.token_preview || '-' }}</div>
-          <div><strong>Query ID:</strong> {{ config?.query_id || '-' }}</div>
-        </div>
-        <div class="settings-actions">
-          <button @click="loadConfigStatus">Refresh Status</button>
-        </div>
-      </div>
-
       <div class="card settings-card account-settings-card">
         <div class="section-title">Trading Accounts</div>
         <div class="settings-copy muted-copy">
@@ -200,8 +175,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { fetchIBKRConfigStatus } from '../api/syncs'
+import { onMounted, reactive, ref } from 'vue'
 import {
   fetchDashboardPreferences,
   fetchDashboardTabs,
@@ -220,11 +194,9 @@ import { responseRows } from '../api/pagination'
 import { refreshAccounts } from '../state/accounts'
 import AccountSyncPanel from '../components/AccountSyncPanel.vue'
 
-const config = ref(null)
 const tabs = ref([])
 const saving = ref(false)
 const form = reactive({ default_dashboard_tab: null, default_date_range: 'all' })
-const ready = computed(() => Boolean(config.value?.token_exists && config.value?.query_id_exists))
 const strategyOptions = ref([])
 const strategySaving = ref(false)
 const newStrategyName = ref('')
@@ -297,14 +269,6 @@ async function toggleTradingAccount(account) {
   await Promise.all([loadBrokerAccounts(), refreshAccounts()])
 }
 
-async function loadConfigStatus() {
-  try {
-    const res = await fetchIBKRConfigStatus()
-    config.value = res.data
-  } catch {
-    config.value = { token_exists: false, query_id_exists: false, token_preview: '', query_id: '' }
-  }
-}
 async function loadDashboardSettings() {
   const [tabRes, prefRes] = await Promise.all([fetchDashboardTabs(), fetchDashboardPreferences()])
   tabs.value = tabRes.data?.results || tabRes.data || []
@@ -396,7 +360,6 @@ function clearLocalPrefs() {
 
 onMounted(async () => {
   await Promise.all([
-    loadConfigStatus(),
     loadDashboardSettings(),
     loadStrategyOptions(),
     loadMistakeTags(),
