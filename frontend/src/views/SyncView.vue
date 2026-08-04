@@ -30,20 +30,6 @@
       </p>
     </div>
 
-    <div class="card sync-action-card">
-      <div class="section-title">Remove an old account</div>
-      <p class="muted-copy">选择不再使用的账户并删除后，该账户的 executions、fills、trade groups 和 Dashboard 统计都会移除。此操作不可撤销；不会影响其他账户。</p>
-      <div class="sync-delete-row">
-        <select v-model="accountToDelete" :disabled="loading || !accounts.length">
-          <option value="">Select an account</option>
-          <option v-for="account in activeAccounts" :key="account.id" :value="account.account_code">{{ account.display_name || account.account_code }}</option>
-        </select>
-        <button class="danger" @click="removeAccountData" :disabled="loading || !accountToDelete">
-          {{ loadingMode === 'delete' ? 'Removing...' : 'Remove selected account data' }}
-        </button>
-      </div>
-    </div>
-
     <div v-if="result" class="card success-box">
       <div class="section-title">Latest Result</div>
       <p><strong>Job ID:</strong> {{ result.job_id }}</p>
@@ -95,7 +81,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { deleteIBKRAccountData, fetchIBKRConfigStatus, fetchSyncJobs, startIBKRAccountSync } from '../api/syncs'
+import { fetchIBKRConfigStatus, fetchSyncJobs, startIBKRAccountSync } from '../api/syncs'
 import { responseCount, responseRows } from '../api/pagination'
 import { refreshAccounts } from '../state/accounts'
 import { fetchBrokerAccounts } from '../api/common'
@@ -108,15 +94,12 @@ const configStatus = ref(null)
 const jobs = ref([])
 const page = ref(1)
 const totalCount = ref(0)
-const accountToDelete = ref('')
 const brokerAccounts = ref([])
 const selectedAccountId = ref('')
 const activeAccounts = computed(() => brokerAccounts.value.filter((account) => account.is_active))
 const selectedAccount = computed(() => activeAccounts.value.find((account) => String(account.id) === selectedAccountId.value) || null)
 const selectedAccountConfigured = computed(() => Boolean(selectedAccount.value?.token_configured && selectedAccount.value?.flex_query_id))
 const localCacheExists = computed(() => Boolean(selectedAccount.value?.local_cache_exists))
-
-const accounts = activeAccounts
 
 function formatDate(v) {
   return new Date(v).toLocaleString()
@@ -175,27 +158,6 @@ async function runSync(mode = 'real') {
   }
 }
 
-async function removeAccountData() {
-  const account = accountToDelete.value
-  if (!account || !window.confirm(`Remove all locally imported data for ${account}? This cannot be undone.`)) return
-  loading.value = true
-  loadingMode.value = 'delete'
-  try {
-    const res = await deleteIBKRAccountData(account)
-    result.value = null
-    accountToDelete.value = ''
-    await refreshAccounts()
-    await loadJobs(1)
-    await loadAccounts()
-    alert(`Removed ${res.data.deleted_execution_count} records for ${account}.`)
-  } catch (err) {
-    alert(err?.response?.data?.error || err?.message || 'Unable to remove account data')
-  } finally {
-    loading.value = false
-    loadingMode.value = ''
-  }
-}
-
 onMounted(() => {
   loadJobs(1)
   loadAccounts()
@@ -204,9 +166,5 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.sync-delete-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.sync-delete-row select { min-width: 200px; }
-.danger { background: #b91c1c; }
-.danger:hover:not(:disabled) { background: #991b1b; }
 .sync-account-picker { display: grid; gap: 6px; max-width: 420px; margin-bottom: 8px; }
 </style>

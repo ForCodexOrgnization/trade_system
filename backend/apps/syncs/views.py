@@ -8,8 +8,6 @@ from rest_framework.generics import ListAPIView
 from apps.brokers.ibkr_client import IBKRClient
 from apps.brokers.services import IBKRSyncService
 from apps.common.models import BrokerAccount
-from apps.trades.models import RawIBKRExecution
-from apps.trades.services import rebuild_all_trade_groups
 from .models import SyncJob
 from .serializers import SyncJobSerializer
 
@@ -130,30 +128,6 @@ class StartIBKRAccountSyncAPIView(APIView):
 class StartLocalIBKRSyncAPIView(APIView):
     def post(self, request):
         return _run_ibkr_sync(use_local_flex_xml=True, job_type='local_full_sync')
-
-
-class DeleteIBKRAccountDataAPIView(APIView):
-    """Remove every locally imported execution for one IBKR account."""
-
-    def delete(self, request):
-        account = str(request.data.get('account') or '').strip()
-        if not account:
-            return Response({'error': 'An account is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        executions = RawIBKRExecution.objects.filter(
-            broker_account__broker='ibkr',
-            broker_account__account_code=account,
-        )
-        deleted_execution_count = executions.count()
-        executions.delete()
-        # Raw executions cascade to fills. Rebuild groups from the accounts that remain
-        # so deleted-account positions and PnL cannot remain visible in the dashboard.
-        rebuild_all_trade_groups()
-        BrokerAccount.objects.filter(
-            broker='ibkr',
-            account_code=account,
-        ).update(is_active=False)
-        return Response({'account': account, 'deleted_execution_count': deleted_execution_count})
 
 
 class SyncJobListAPIView(ListAPIView):

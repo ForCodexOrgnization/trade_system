@@ -9,5 +9,3 @@ export const startIBKRAccountSync = (accountId, useLocalFlexXml = false) => api.
 )
 export const fetchSyncJobs = (params = {}) => api.get('/syncs/jobs/', { params })
 export const fetchIBKRConfigStatus = () => api.get('/syncs/ibkr/config-debug/')
-
-export const deleteIBKRAccountData = (account) => api.delete('/syncs/ibkr/account-data/', { data: { account } })
