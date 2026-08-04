@@ -215,7 +215,7 @@ class DailyReviewViewSet(AccountScopedMixin, viewsets.ModelViewSet):
             if selected_snapshot and trade_review and trade_review.setup:
                 setup_match = trade_review.setup.name.lower().startswith(selected_snapshot.setup_type.lower())
             executions_qs = RawIBKRExecution.objects.filter(
-                account=account.account_code,
+                broker_account=account,
                 symbol=group.symbol,
             )
             if group.opened_at:

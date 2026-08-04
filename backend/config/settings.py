@@ -12,6 +12,7 @@ IBKR_FLEX_QUERY_ID = os.environ.get("IBKR_FLEX_QUERY_ID", "")
 _ibkr_flex_history_years = os.environ.get("IBKR_FLEX_HISTORY_YEARS", "").strip()
 IBKR_FLEX_HISTORY_YEARS = int(_ibkr_flex_history_years) if _ibkr_flex_history_years else None
 IBKR_FLEX_USER_AGENT = os.environ.get("IBKR_FLEX_USER_AGENT", "IBKRTradeJournal/1.0")
+IBKR_CREDENTIAL_ENCRYPTION_KEY = os.environ.get("IBKR_CREDENTIAL_ENCRYPTION_KEY", "")
 
 IBKR_FLEX_SEND_REQUEST_URL = (
     "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/"

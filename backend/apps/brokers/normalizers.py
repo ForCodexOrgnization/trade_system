@@ -23,7 +23,7 @@ def parse_dt(value):
 def build_execution_dedupe_key(row: dict) -> str:
     stable_execution_id = row.get('execution_id')
     if stable_execution_id:
-        raw = f"ibkr|exec|{stable_execution_id}"
+        raw = f"ibkr|{to_str(row.get('account'))}|exec|{stable_execution_id}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
     parts = [

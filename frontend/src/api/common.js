@@ -205,3 +205,7 @@ export const createStrategyOption = (payload) => api.post('/common/strategy-opti
 export const updateStrategyOption = (id, payload) => api.patch(`/common/strategy-options/${id}/`, payload)
 export const deleteStrategyOption = (id) => api.delete(`/common/strategy-options/${id}/`)
 export const fetchBrokerAccounts = () => api.get('/common/broker-accounts/')
+export const createBrokerAccount = (payload) => api.post('/common/broker-accounts/', payload)
+export const updateBrokerAccount = (id, payload) => api.patch(`/common/broker-accounts/${id}/`, payload)
+export const disableBrokerAccount = (id) => api.delete(`/common/broker-accounts/${id}/`)
+export const testBrokerAccountConnection = (id) => api.post(`/common/broker-accounts/${id}/test-connection/`)

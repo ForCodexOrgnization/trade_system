@@ -6,17 +6,28 @@
     </div>
 
     <div class="card sync-action-card">
-      <button @click="runSync('real')" :disabled="loading">
+      <label class="sync-account-picker">
+        <span>Sync Account</span>
+        <select v-model="selectedAccountId" :disabled="loading">
+          <option value="">Select a configured account</option>
+          <option v-for="account in activeAccounts" :key="account.id" :value="String(account.id)">
+            {{ account.display_name || account.account_code }} · {{ account.connection_status }}
+          </option>
+        </select>
+      </label>
+      <button @click="runSync('real')" :disabled="loading || !selectedAccountConfigured">
         {{ loadingMode === 'real' ? 'Syncing from IBKR...' : 'Start Real IBKR Sync' }}
       </button>
-      <button class="secondary" @click="runSync('local')" :disabled="loading || !localCacheExists">
+      <button class="secondary" @click="runSync('local')" :disabled="loading || !selectedAccount || !localCacheExists">
         {{ loadingMode === 'local' ? 'Syncing from local XML...' : 'Start Local Test Sync' }}
       </button>
-      <p class="muted-copy">Local test sync uses backend/data/ibkr_last_flex_statement.xml from the last successful real sync and does not call IBKR.</p>
-      <p v-if="configStatus" :class="['muted-copy', localCacheExists ? 'pnl-positive' : 'pnl-negative']">
-        Local XML cache: {{ localCacheExists ? 'Ready' : 'Missing — run Start Real IBKR Sync once first' }}
+      <p class="muted-copy">每个账户使用自己的 Flex Token、Query ID 和本地 XML 缓存。请先在 Settings 添加并验证账户。</p>
+      <p v-if="selectedAccount && !selectedAccountConfigured" class="muted-copy pnl-negative">
+        当前账户尚未配置 Flex Token / Query ID，请先到 Settings 完成配置。
       </p>
-      <p class="muted-copy">切换 IBKR Flex Token/Query 只会决定下一次同步的数据来源，不会删除本地已导入的历史账户数据；请通过 Dashboard 的 Account 筛选查看指定账户。</p>
+      <p v-if="configStatus" :class="['muted-copy', localCacheExists ? 'pnl-positive' : 'pnl-negative']">
+        Selected account XML cache: {{ localCacheExists ? 'Ready' : 'Missing — run a real sync for this account first' }}
+      </p>
     </div>
 
     <div class="card sync-action-card">
@@ -25,7 +36,7 @@
       <div class="sync-delete-row">
         <select v-model="accountToDelete" :disabled="loading || !accounts.length">
           <option value="">Select an account</option>
-          <option v-for="account in accounts" :key="account" :value="account">{{ account }}</option>
+          <option v-for="account in activeAccounts" :key="account.id" :value="account.account_code">{{ account.display_name || account.account_code }}</option>
         </select>
         <button class="danger" @click="removeAccountData" :disabled="loading || !accountToDelete">
           {{ loadingMode === 'delete' ? 'Removing...' : 'Remove selected account data' }}
@@ -65,7 +76,7 @@
             <td>{{ job.id }}</td>
             <td><span :class="['badge', job.status]">{{ job.status }}</span></td>
             <td>{{ job.job_type }}</td>
-            <td>{{ formatAccounts(job.metadata?.accounts) }}</td>
+            <td>{{ job.broker_account_code || formatAccounts(job.metadata?.accounts) }}</td>
             <td>{{ job.raw_count }}</td>
             <td>{{ job.inserted_count }}</td>
             <td>{{ job.duplicate_count }}</td>
@@ -84,10 +95,10 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { deleteIBKRAccountData, fetchIBKRConfigStatus, fetchSyncJobs, startIBKRSync, startLocalIBKRSync } from '../api/syncs'
+import { deleteIBKRAccountData, fetchIBKRConfigStatus, fetchSyncJobs, startIBKRAccountSync } from '../api/syncs'
 import { responseCount, responseRows } from '../api/pagination'
 import { refreshAccounts } from '../state/accounts'
-import { fetchTradeFilterOptions } from '../api/trades'
+import { fetchBrokerAccounts } from '../api/common'
 import PaginationControls from '../components/PaginationControls.vue'
 
 const loading = ref(false)
@@ -98,10 +109,14 @@ const jobs = ref([])
 const page = ref(1)
 const totalCount = ref(0)
 const accountToDelete = ref('')
-const availableAccounts = ref([])
-const localCacheExists = computed(() => Boolean(configStatus.value?.local_flex_xml_cache_exists))
+const brokerAccounts = ref([])
+const selectedAccountId = ref('')
+const activeAccounts = computed(() => brokerAccounts.value.filter((account) => account.is_active))
+const selectedAccount = computed(() => activeAccounts.value.find((account) => String(account.id) === selectedAccountId.value) || null)
+const selectedAccountConfigured = computed(() => Boolean(selectedAccount.value?.token_configured && selectedAccount.value?.flex_query_id))
+const localCacheExists = computed(() => Boolean(selectedAccount.value?.local_cache_exists))
 
-const accounts = computed(() => availableAccounts.value)
+const accounts = activeAccounts
 
 function formatDate(v) {
   return new Date(v).toLocaleString()
@@ -119,8 +134,11 @@ async function loadJobs(nextPage = 1) {
 }
 
 async function loadAccounts() {
-  const res = await fetchTradeFilterOptions()
-  availableAccounts.value = res.data?.accounts || []
+  const res = await fetchBrokerAccounts()
+  brokerAccounts.value = responseRows(res.data)
+  if (!activeAccounts.value.some((account) => String(account.id) === selectedAccountId.value)) {
+    selectedAccountId.value = activeAccounts.value[0] ? String(activeAccounts.value[0].id) : ''
+  }
 }
 
 async function loadConfigStatus() {
@@ -129,6 +147,10 @@ async function loadConfigStatus() {
 }
 
 async function runSync(mode = 'real') {
+  if (!selectedAccount.value) {
+    alert('Select a configured trading account first.')
+    return
+  }
   if (mode === 'local' && !localCacheExists.value) {
     alert('Local IBKR Flex XML cache is missing. Please run Start Real IBKR Sync once first.')
     return
@@ -136,8 +158,7 @@ async function runSync(mode = 'real') {
   loading.value = true
   loadingMode.value = mode
   try {
-    const request = mode === 'local' ? startLocalIBKRSync : startIBKRSync
-    const res = await request()
+    const res = await startIBKRAccountSync(selectedAccount.value.id, mode === 'local')
     result.value = res.data
     await refreshAccounts()
     await loadJobs(1)
@@ -187,4 +208,5 @@ onMounted(() => {
 .sync-delete-row select { min-width: 200px; }
 .danger { background: #b91c1c; }
 .danger:hover:not(:disabled) { background: #991b1b; }
+.sync-account-picker { display: grid; gap: 6px; max-width: 420px; margin-bottom: 8px; }
 </style>

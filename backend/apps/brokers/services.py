@@ -44,8 +44,10 @@ class IBKRSyncService:
             "raw_payload": row.get("raw_payload", {})
         }
 
-    def _build_pre_sync_snapshot(self) -> dict:
+    def _build_pre_sync_snapshot(self, target_account=None) -> dict:
         groups = TradeGroup.all_objects.all().order_by('id')
+        if target_account is not None:
+            groups = groups.filter(account=target_account)
         protected_groups = []
         for group in groups:
             has_user_content = any(
@@ -78,8 +80,8 @@ class IBKRSyncService:
             'protected_examples': protected_groups[:50],
         }
 
-    def run_full_sync(self, sync_job: SyncJob):
-        pre_sync_snapshot = self._build_pre_sync_snapshot()
+    def run_full_sync(self, sync_job: SyncJob, target_account: BrokerAccount | None = None):
+        pre_sync_snapshot = self._build_pre_sync_snapshot(target_account)
         sync_job.metadata = {
             **(sync_job.metadata or {}),
             'pre_sync_tradegroup_snapshot': pre_sync_snapshot,
@@ -88,12 +90,34 @@ class IBKRSyncService:
 
         rows = self.client.fetch_all_executions()
         accounts = sorted({str(row.get('account')).strip() for row in rows if row.get('account')})
-        for account_code in accounts:
-            BrokerAccount.objects.update_or_create(
-                broker='ibkr',
-                account_code=account_code,
-                defaults={'display_name': account_code, 'is_active': True},
-            )
+        reported_accounts = sorted(set(
+            getattr(self.client, 'last_fetch_metadata', {}).get('reported_accounts') or accounts
+        ))
+        if target_account is not None:
+            expected_account = target_account.account_code
+            unexpected_accounts = sorted(set(reported_accounts) - {expected_account})
+            if expected_account not in reported_accounts:
+                raise ValueError(
+                    f'Flex Query did not return configured account {expected_account}. '
+                    f'Reported accounts: {", ".join(reported_accounts) or "none"}.'
+                )
+            if unexpected_accounts:
+                raise ValueError(
+                    f'Flex Query for {expected_account} also returned other accounts: '
+                    f'{", ".join(unexpected_accounts)}. Use an account-specific Flex Query.'
+                )
+            rows = [row for row in rows if str(row.get('account') or '').strip() == expected_account]
+            accounts = [expected_account]
+            account_objects = {expected_account: target_account}
+        else:
+            account_objects = {}
+            for account_code in accounts:
+                account_object, _ = BrokerAccount.objects.update_or_create(
+                    broker='ibkr',
+                    account_code=account_code,
+                    defaults={'display_name': account_code, 'is_active': True},
+                )
+                account_objects[account_code] = account_object
         sync_job.metadata = {
             **(sync_job.metadata or {}),
             'accounts': accounts,
@@ -108,6 +132,7 @@ class IBKRSyncService:
 
         for row in rows:
             normalized = self.normalize_row(row)
+            normalized['broker_account'] = account_objects[normalized['account']]
             if normalized.get('trade_date'):
                 touched_trade_dates.add(normalized['trade_date'])
             dedupe_key = build_execution_dedupe_key(normalized)

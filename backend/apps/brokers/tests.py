@@ -124,6 +124,20 @@ class IBKRClientLocalCacheTests(SimpleTestCase):
 
 
 class IBKRSyncServiceTests(SimpleTestCase):
+    def test_account_sync_rejects_a_query_containing_another_account(self):
+        class Client:
+            last_fetch_metadata = {'reported_accounts': ['DU-EXPECTED', 'DU-OTHER']}
+
+            def fetch_all_executions(self):
+                return []
+
+        job = SimpleNamespace(metadata={}, save=lambda **kwargs: None)
+        target = SimpleNamespace(account_code='DU-EXPECTED')
+
+        with patch.object(IBKRSyncService, '_build_pre_sync_snapshot', return_value={}):
+            with self.assertRaisesRegex(ValueError, 'also returned other accounts'):
+                IBKRSyncService(client=Client()).run_full_sync(job, target_account=target)
+
     def test_sync_records_accounts_returned_by_the_flex_report(self):
         class Client:
             def fetch_all_executions(self):
@@ -167,7 +181,13 @@ class IBKRSyncServiceTests(SimpleTestCase):
         with (
             patch.object(IBKRSyncService, '_build_pre_sync_snapshot', return_value={}),
             patch('apps.brokers.services.transaction.atomic', side_effect=nullcontext),
-            patch('apps.brokers.services.BrokerAccount.objects.update_or_create'),
+            patch(
+                'apps.brokers.services.BrokerAccount.objects.update_or_create',
+                side_effect=[
+                    (SimpleNamespace(account_code='DU123'), False),
+                    (SimpleNamespace(account_code='DU456'), False),
+                ],
+            ),
             patch('apps.brokers.services.RawIBKRExecution.objects.create', return_value=raw_execution),
             patch('apps.brokers.services.create_fill_from_raw'),
             patch('apps.brokers.services.rebuild_trade_groups_for_dates'),

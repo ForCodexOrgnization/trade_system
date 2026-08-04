@@ -67,6 +67,18 @@ def _has_trade_group_account_column():
     return 'account_id' in columns
 
 
+def _has_raw_execution_broker_account_column():
+    table_name = RawIBKRExecution._meta.db_table
+    with connection.cursor() as cursor:
+        if table_name not in connection.introspection.table_names(cursor):
+            return False
+        columns = {
+            item.name
+            for item in connection.introspection.get_table_description(cursor, table_name)
+        }
+    return 'broker_account_id' in columns
+
+
 def _group_signature(
     *,
     account_code,
@@ -906,11 +918,10 @@ def rebuild_trade_groups_for_date(trade_date):
 
 @transaction.atomic
 def rebuild_all_trade_groups():
-    fills = list(
-        TradeFill.objects.select_related('raw_execution')
-        .all()
-        .order_by('symbol', 'asset_class', 'executed_at', 'id')
-    )
+    fills_qs = TradeFill.objects.select_related('raw_execution').all()
+    if not _has_raw_execution_broker_account_column():
+        fills_qs = fills_qs.defer('raw_execution__broker_account')
+    fills = list(fills_qs.order_by('symbol', 'asset_class', 'executed_at', 'id'))
     fills = _prepare_rebuild_fills(fills)
 
     has_matched_lot_table = _has_trade_matched_lot_table()

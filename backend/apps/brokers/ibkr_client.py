@@ -1,4 +1,5 @@
 import time
+import re
 from pathlib import Path
 from decimal import Decimal
 from datetime import date, datetime, timedelta
@@ -19,12 +20,24 @@ class IBKRClient:
     }
     MAX_FLEX_RANGE_DAYS = 365
 
-    def __init__(self, use_local_flex_xml: bool = False):
+    def __init__(
+        self,
+        use_local_flex_xml: bool = False,
+        flex_token: str | None = None,
+        flex_query_id: str | None = None,
+        account_code: str | None = None,
+    ):
         self.use_local_flex_xml = use_local_flex_xml
+        self.flex_token = flex_token
+        self.flex_query_id = flex_query_id
+        self.account_code = str(account_code or "").strip()
         self.last_fetch_metadata: dict = {}
 
     @property
     def flex_statement_cache_path(self) -> Path:
+        if self.account_code:
+            safe_code = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.account_code)
+            return Path(settings.BASE_DIR) / "data" / "ibkr_flex" / f"{safe_code}.xml"
         return Path(settings.BASE_DIR) / "data" / "ibkr_last_flex_statement.xml"
 
     @property
@@ -35,7 +48,12 @@ class IBKRClient:
         if self.use_local_flex_xml:
             xml_text = self.fetch_local_flex_statement_xml()
             rows = self.parse_flex_xml(xml_text)
-            self.last_fetch_metadata = self._build_fetch_metadata(rows, [], source="local_cache")
+            self.last_fetch_metadata = self._build_fetch_metadata(
+                rows,
+                [],
+                source="local_cache",
+                reported_accounts=self.extract_account_codes(xml_text),
+            )
             return rows
 
         ranges = self.full_history_ranges()
@@ -50,6 +68,7 @@ class IBKRClient:
                 rows,
                 [{"from_date": None, "to_date": None, "raw_count": len(rows)}],
                 source="ibkr_query_period",
+                reported_accounts=self.extract_account_codes(xml_text),
             )
             return rows
 
@@ -84,7 +103,15 @@ class IBKRClient:
                 time.sleep(1)
 
         self.cache_flex_statement_xml(self.combine_flex_documents(documents))
-        self.last_fetch_metadata = self._build_fetch_metadata(rows, chunk_metadata, source="ibkr")
+        reported_accounts = sorted({
+            code for document in documents for code in self.extract_account_codes(document)
+        })
+        self.last_fetch_metadata = self._build_fetch_metadata(
+            rows,
+            chunk_metadata,
+            source="ibkr",
+            reported_accounts=reported_accounts,
+        )
         return rows
 
     def full_history_ranges(self, today: date | None = None) -> list[tuple[date, date]] | None:
@@ -112,7 +139,13 @@ class IBKRClient:
                 raise ValueError(f"Invalid XML from IBKR Flex statement: {exc}") from exc
         return ET.tostring(root, encoding="unicode")
 
-    def _build_fetch_metadata(self, rows: list[dict], chunks: list[dict], source: str) -> dict:
+    def _build_fetch_metadata(
+        self,
+        rows: list[dict],
+        chunks: list[dict],
+        source: str,
+        reported_accounts: list[str] | None = None,
+    ) -> dict:
         executed_dates = sorted(
             row["executed_at"].date() for row in rows if row.get("executed_at")
         )
@@ -123,6 +156,7 @@ class IBKRClient:
             "execution_count": len(rows),
             "earliest_execution_date": executed_dates[0].isoformat() if executed_dates else None,
             "latest_execution_date": executed_dates[-1].isoformat() if executed_dates else None,
+            "reported_accounts": sorted(set(reported_accounts or [])),
         }
 
     def fetch_local_flex_statement_xml(self) -> str:
@@ -144,8 +178,8 @@ class IBKRClient:
         from_date: date | None = None,
         to_date: date | None = None,
     ) -> str:
-        token = settings.IBKR_FLEX_TOKEN
-        query_id = settings.IBKR_FLEX_QUERY_ID
+        token = self.flex_token if self.flex_token is not None else settings.IBKR_FLEX_TOKEN
+        query_id = self.flex_query_id if self.flex_query_id is not None else settings.IBKR_FLEX_QUERY_ID
 
         if not token or not query_id:
             raise ValueError(
@@ -287,6 +321,20 @@ class IBKRClient:
             rows.append(row)
 
         return rows
+
+    def extract_account_codes(self, xml_text: str) -> list[str]:
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            raise ValueError(f"Invalid XML from IBKR Flex statement: {exc}") from exc
+
+        codes = set()
+        for element in root.iter():
+            for key in ("accountId", "account", "acctId"):
+                value = str(element.attrib.get(key) or "").strip()
+                if value:
+                    codes.add(value)
+        return sorted(codes)
 
     def map_trade_node(self, data: dict) -> dict:
         side_raw = (data.get("buySell") or "").upper().strip()
