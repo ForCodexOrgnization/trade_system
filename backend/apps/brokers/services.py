@@ -90,6 +90,7 @@ class IBKRSyncService:
         sync_job.metadata = {
             **(sync_job.metadata or {}),
             'accounts': accounts,
+            'ibkr_fetch': getattr(self.client, 'last_fetch_metadata', {}),
         }
         sync_job.raw_count = len(rows)
         sync_job.save(update_fields=['metadata', 'raw_count', 'updated_at'])
@@ -131,5 +132,6 @@ class IBKRSyncService:
             'duplicate_count': duplicate_count,
             'error_count': sync_job.error_count,
             'accounts': accounts,
+            'ibkr_fetch': getattr(self.client, 'last_fetch_metadata', {}),
             'touched_trade_dates': [str(x) for x in sorted(touched_trade_dates)],
         }

@@ -116,6 +116,8 @@ class IBKRConfigDebugAPIView(APIView):
             "query_id_exists": bool(query_id),
             "token_preview": f"{token[:6]}...{token[-4:]}" if len(token) >= 10 else "",
             "query_id": query_id,
+            "history_years": settings.IBKR_FLEX_HISTORY_YEARS,
+            "send_request_url": settings.IBKR_FLEX_SEND_REQUEST_URL,
             "local_flex_xml_cache_exists": client.has_flex_statement_cache,
             "local_flex_xml_cache_path": str(cache_path),
         })

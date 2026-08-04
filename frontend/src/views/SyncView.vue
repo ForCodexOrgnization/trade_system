@@ -143,7 +143,8 @@ async function runSync(mode = 'real') {
     await loadConfigStatus()
   } catch (err) {
     const serverError = err?.response?.data?.error
-    const timeoutError = err?.code === 'ECONNABORTED' ? 'Sync request timed out (3 min). Please retry.' : ''
+    const timeoutError = err?.code === 'ECONNABORTED' ? 'Sync request timed out (15 min). Please retry.' : ''
+    await loadJobs(1)
     alert(serverError || timeoutError || err?.message || 'Sync failed')
   } finally {
     loading.value = false
