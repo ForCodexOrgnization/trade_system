@@ -86,6 +86,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { deleteIBKRAccountData, fetchIBKRConfigStatus, fetchSyncJobs, startIBKRSync, startLocalIBKRSync } from '../api/syncs'
 import { responseCount, responseRows } from '../api/pagination'
+import { refreshAccounts } from '../state/accounts'
 import { fetchTradeFilterOptions } from '../api/trades'
 import PaginationControls from '../components/PaginationControls.vue'
 
@@ -138,6 +139,7 @@ async function runSync(mode = 'real') {
     const request = mode === 'local' ? startLocalIBKRSync : startIBKRSync
     const res = await request()
     result.value = res.data
+    await refreshAccounts()
     await loadJobs(1)
     await loadAccounts()
     await loadConfigStatus()
@@ -161,6 +163,7 @@ async function removeAccountData() {
     const res = await deleteIBKRAccountData(account)
     result.value = null
     accountToDelete.value = ''
+    await refreshAccounts()
     await loadJobs(1)
     await loadAccounts()
     alert(`Removed ${res.data.deleted_execution_count} records for ${account}.`)

@@ -1151,6 +1151,65 @@ body {
 .tv-nav-links a:hover {
   color: #fff;
 }
+.tv-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-width: 0;
+}
+.global-account-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 230px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.07);
+}
+.global-account-label {
+  color: rgba(255,255,255,0.62);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+.global-account-switcher select {
+  min-width: 120px;
+  padding: 7px 28px 7px 9px;
+  border-color: rgba(255,255,255,0.18);
+  background: #152440;
+  color: #fff;
+  font-weight: 700;
+}
+.dashboard-account-boundary {
+  min-height: 40px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+}
+.raw-account-boundary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+}
+.account-bootstrap-card {
+  display: grid;
+  gap: 12px;
+  max-width: 620px;
+  margin: 48px auto;
+}
+.account-bootstrap-error { color: var(--negative); }
 .dashboard-workbench {
   display: grid;
   gap: 14px;
@@ -1533,6 +1592,9 @@ body {
 }
 @media (max-width: 860px) {
   .tv-nav { flex-direction: column; align-items: flex-start; }
+  .tv-nav-right { width: 100%; flex-direction: column; align-items: stretch; gap: 12px; }
+  .global-account-switcher { width: 100%; }
+  .global-account-switcher select { flex: 1; }
   .tv-nav-links { flex-wrap: wrap; gap: 14px; }
   .tv-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tv-dashboard-chart-grid-triple { grid-template-columns: 1fr; }

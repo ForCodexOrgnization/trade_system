@@ -88,10 +88,7 @@
             <div v-if="filterOptionsLoaded" class="dashboard-sidebar-form">
               <label class="dashboard-sidebar-field">
                 <span>Account</span>
-                <select v-model="filters.account">
-                  <option value="">All Accounts</option>
-                  <option v-for="item in filterOptions.accounts" :key="item" :value="item">{{ item }}</option>
-                </select>
+                <div class="dashboard-account-boundary">{{ activeAccountCode }}</div>
               </label>
               <label class="dashboard-sidebar-field">
                 <span>Symbol</span>
@@ -354,10 +351,12 @@ import StatCard from '../components/StatCard.vue'
 import TradeTable from '../components/TradeTable.vue'
 import TradesVizChart from '../components/TradesVizChart.vue'
 import PaginationControls from '../components/PaginationControls.vue'
+import { useAccounts } from '../state/accounts'
 
 const DASHBOARD_SELECTED_KEY = 'trade-dashboard-selected-v100'
 const DASHBOARD_WIDGET_SCHEMA_KEY = 'trade-dashboard-widget-schema-v2'
 const DASHBOARD_STATE_KEY = 'trade-dashboard-state-v3'
+const accountStorageKey = (baseKey) => `${baseKey}:${activeAccountCode.value || 'unselected'}`
 const DEFAULT_FILTERS = {
   date_from: '',
   date_to: '',
@@ -607,7 +606,7 @@ function safeClone(value, fallback = null) {
 function loadDashboardStateMap() {
   if (typeof window === 'undefined') return {}
   try {
-    const raw = JSON.parse(window.localStorage.getItem(DASHBOARD_STATE_KEY) || '{}')
+    const raw = JSON.parse(window.localStorage.getItem(accountStorageKey(DASHBOARD_STATE_KEY)) || '{}')
     return raw && typeof raw === 'object' ? raw : {}
   } catch {
     return {}
@@ -617,7 +616,7 @@ function loadDashboardStateMap() {
 function saveDashboardStateMap(nextMap) {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(DASHBOARD_STATE_KEY, JSON.stringify(nextMap || {}))
+    window.localStorage.setItem(accountStorageKey(DASHBOARD_STATE_KEY), JSON.stringify(nextMap || {}))
   } catch {
     // ignore storage errors
   }
@@ -708,6 +707,7 @@ const detailPageSize = 5
 const draggingPanelId = ref(null)
 
 const route = useRoute()
+const { activeAccountCode } = useAccounts()
 const filters = reactive({ ...DEFAULT_FILTERS })
 const filterOptions = ref({ accounts: [], symbols: [], strategies: [], asset_classes: [] })
 const filterOptionsLoaded = ref(false)
@@ -720,7 +720,7 @@ const dashboardHydrated = ref(false)
 const activeTab = computed(() => {
   return tabs.value.find((item) => String(item.id) === String(selectedTabId.value)) || tabs.value[0] || null
 })
-const selectedAccountLabel = computed(() => filters.account || 'All Accounts')
+const selectedAccountLabel = computed(() => activeAccountCode.value || 'No Account')
 const dateSummaryLabel = computed(() => {
   if (filters.date_from && filters.date_to) return `${filters.date_from} → ${filters.date_to}`
   if (filters.date_from) return `${filters.date_from} → Now`
@@ -901,11 +901,11 @@ async function loadTabs() {
   const rawTabs = Array.isArray(res.data) ? res.data : (res.data?.results || [])
   tabs.value = rawTabs.map((tab, index) => normalizeTab(tab, index))
 
-  const storedSelection = localStorage.getItem(DASHBOARD_SELECTED_KEY)
+  const storedSelection = localStorage.getItem(accountStorageKey(DASHBOARD_SELECTED_KEY))
   const candidateSelection = storedSelection || preferences.value.default_dashboard_tab || tabs.value[0]?.id || null
   const selected = tabs.value.find((item) => String(item.id) === String(candidateSelection))?.id || tabs.value[0]?.id || null
   selectedTabId.value = selected
-  localStorage.setItem(DASHBOARD_SELECTED_KEY, String(selected || ''))
+  localStorage.setItem(accountStorageKey(DASHBOARD_SELECTED_KEY), String(selected || ''))
   syncFiltersFromTab(true)
 }
 
@@ -1115,6 +1115,7 @@ async function applyQuickRange(key, reload = true) {
 }
 
 async function applyFilters() {
+  filters.account = activeAccountCode.value
   latestPage.value = 1
   closedPage.value = 1
   filterPanelOpen.value = false
@@ -1128,6 +1129,7 @@ async function applyFilters() {
 
 async function resetFilters() {
   Object.assign(filters, DEFAULT_FILTERS)
+  filters.account = activeAccountCode.value
   activeQuickRange.value = preferences.value.default_date_range || 'all'
   latestPage.value = 1
   closedPage.value = 1
@@ -1147,7 +1149,7 @@ async function selectTab(tabId) {
   const nextTab = tabs.value.find((item) => String(item.id) === String(tabId))
   if (!nextTab) return
   selectedTabId.value = nextTab.id
-  localStorage.setItem(DASHBOARD_SELECTED_KEY, String(nextTab.id))
+  localStorage.setItem(accountStorageKey(DASHBOARD_SELECTED_KEY), String(nextTab.id))
   latestPage.value = 1
   closedPage.value = 1
   const restored = restoreDashboardSnapshot(nextTab.id, { restoreFilters: true })
@@ -1241,11 +1243,14 @@ async function onPanelDrop(targetId) {
 }
 
 onMounted(async () => {
-  const routeSelectedId = typeof window !== 'undefined' ? window.localStorage.getItem(DASHBOARD_SELECTED_KEY) : null
+  const routeSelectedId = typeof window !== 'undefined'
+    ? window.localStorage.getItem(accountStorageKey(DASHBOARD_SELECTED_KEY))
+    : null
   await loadPreferences()
   await loadTabs()
   if (routeSelectedId) restoreDashboardSnapshot(routeSelectedId, { restoreFilters: false })
   syncFiltersFromTab(true, true)
+  filters.account = activeAccountCode.value
   await loadData({ keepExisting: true })
   void upgradeLegacyWidgetVisibility()
 })
