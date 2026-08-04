@@ -1,7 +1,6 @@
 import api from './client'
 
 const DASHBOARD_TABS_KEY = 'trade-dashboard-tabs-v1'
-const DASHBOARD_PREFS_KEY = 'trade-dashboard-preferences-v1'
 
 const DEFAULT_FILTERS = {
   date_from: '',
@@ -82,42 +81,6 @@ function saveLocalTabs(tabs) {
   return normalized
 }
 
-function loadLocalPreferences() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(DASHBOARD_PREFS_KEY) || '{}')
-    return {
-      id: raw.id ?? 'local-preferences',
-      default_dashboard_tab: raw.default_dashboard_tab ?? null,
-      default_dashboard_tab_name: raw.default_dashboard_tab_name ?? null,
-      default_date_range: raw.default_date_range || 'all',
-      created_at: raw.created_at || null,
-      updated_at: raw.updated_at || null,
-    }
-  } catch {
-    return {
-      id: 'local-preferences',
-      default_dashboard_tab: null,
-      default_dashboard_tab_name: null,
-      default_date_range: 'all',
-      created_at: null,
-      updated_at: null,
-    }
-  }
-}
-
-function saveLocalPreferences(prefs = {}) {
-  const current = loadLocalPreferences()
-  const tabs = loadLocalTabs()
-  const next = {
-    ...current,
-    ...prefs,
-    default_dashboard_tab_name:
-      tabs.find((tab) => String(tab.id) === String(prefs.default_dashboard_tab ?? current.default_dashboard_tab))?.name || null,
-  }
-  localStorage.setItem(DASHBOARD_PREFS_KEY, JSON.stringify(next))
-  return next
-}
-
 function localResponse(data) {
   return Promise.resolve({ data })
 }
@@ -169,34 +132,7 @@ export const deleteDashboardTab = async (id) => {
   } catch {
     const tabs = loadLocalTabs().filter((tab) => String(tab.id) !== String(id))
     saveLocalTabs(tabs.length ? tabs : [normalizeTab({ id: 'local-overview', name: 'Overview', sort_order: 0 }, 0)])
-    const prefs = loadLocalPreferences()
-    if (String(prefs.default_dashboard_tab) === String(id)) {
-      saveLocalPreferences({ default_dashboard_tab: tabs[0]?.id || null })
-    }
     return localResponse(null)
-  }
-}
-
-export const fetchDashboardPreferences = async () => {
-  try {
-    return await api.get('/common/dashboard-preferences/')
-  } catch {
-    const prefs = loadLocalPreferences()
-    const tabs = loadLocalTabs()
-    if (!prefs.default_dashboard_tab && tabs[0]) {
-      prefs.default_dashboard_tab = tabs[0].id
-      prefs.default_dashboard_tab_name = tabs[0].name
-      saveLocalPreferences(prefs)
-    }
-    return localResponse(prefs)
-  }
-}
-
-export const saveDashboardPreferences = async (payload) => {
-  try {
-    return await api.patch('/common/dashboard-preferences/', payload)
-  } catch {
-    return localResponse(saveLocalPreferences(clone(payload)))
   }
 }
 

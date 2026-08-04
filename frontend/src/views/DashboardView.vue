@@ -340,12 +340,10 @@ import {
   fetchClosedTradeAnalytics,
 } from '../api/trades'
 import {
-  fetchDashboardPreferences,
   fetchDashboardTabs,
   createDashboardTab,
   updateDashboardTab,
   deleteDashboardTab,
-  saveDashboardPreferences,
 } from '../api/common'
 import StatCard from '../components/StatCard.vue'
 import TradeTable from '../components/TradeTable.vue'
@@ -669,7 +667,6 @@ function normalizeTab(tab = {}, index = 0) {
 
 const tabs = ref([])
 const selectedTabId = ref(null)
-const preferences = ref({ default_dashboard_tab: null, default_date_range: 'all' })
 const widgetPanelOpen = ref(false)
 const filterPanelOpen = ref(false)
 const DASHBOARD_SIDEBAR_PIN_KEY = 'ibkr-dashboard-sidebar-pinned'
@@ -884,32 +881,20 @@ function updateQuickRangeState() {
   activeQuickRange.value = ''
 }
 
-async function loadPreferences() {
-  try {
-    const res = await fetchDashboardPreferences()
-    preferences.value = {
-      default_dashboard_tab: res.data?.default_dashboard_tab ?? null,
-      default_date_range: res.data?.default_date_range || 'all',
-    }
-  } catch {
-    preferences.value = { default_dashboard_tab: null, default_date_range: 'all' }
-  }
-}
-
 async function loadTabs() {
   const res = await fetchDashboardTabs()
   const rawTabs = Array.isArray(res.data) ? res.data : (res.data?.results || [])
   tabs.value = rawTabs.map((tab, index) => normalizeTab(tab, index))
 
   const storedSelection = localStorage.getItem(accountStorageKey(DASHBOARD_SELECTED_KEY))
-  const candidateSelection = storedSelection || preferences.value.default_dashboard_tab || tabs.value[0]?.id || null
+  const candidateSelection = storedSelection || tabs.value[0]?.id || null
   const selected = tabs.value.find((item) => String(item.id) === String(candidateSelection))?.id || tabs.value[0]?.id || null
   selectedTabId.value = selected
   localStorage.setItem(accountStorageKey(DASHBOARD_SELECTED_KEY), String(selected || ''))
   syncFiltersFromTab(true)
 }
 
-function syncFiltersFromTab(applyDefaultRange = false, preferSnapshot = false) {
+function syncFiltersFromTab(_applyDefaultRange = false, preferSnapshot = false) {
   const tab = activeTab.value
   if (!tab) {
     Object.assign(filters, DEFAULT_FILTERS)
@@ -919,10 +904,6 @@ function syncFiltersFromTab(applyDefaultRange = false, preferSnapshot = false) {
 
   if (!(preferSnapshot && restoreDashboardSnapshot(tab.id, { restoreFilters: true }))) {
     Object.assign(filters, normalizeFilters(tab.filters))
-  }
-  if (applyDefaultRange && !filters.date_from && !filters.date_to && preferences.value.default_date_range && preferences.value.default_date_range !== 'all') {
-    applyQuickRange(preferences.value.default_date_range, false)
-    return
   }
   updateQuickRangeState()
 }
@@ -1130,15 +1111,11 @@ async function applyFilters() {
 async function resetFilters() {
   Object.assign(filters, DEFAULT_FILTERS)
   filters.account = activeAccountCode.value
-  activeQuickRange.value = preferences.value.default_date_range || 'all'
+  activeQuickRange.value = 'all'
   latestPage.value = 1
   closedPage.value = 1
   filterPanelOpen.value = false
   persistTabFilters()
-  if (preferences.value.default_date_range && preferences.value.default_date_range !== 'all') {
-    await applyQuickRange(preferences.value.default_date_range)
-    return
-  }
   if (activeTab.value) {
     await saveActiveTab({ filters: { ...filters } })
   }
@@ -1190,19 +1167,8 @@ async function deleteTab() {
   tabs.value = tabs.value.filter((item) => String(item.id) !== String(deleteId))
 
   const nextId = tabs.value[0]?.id || null
-  if (String(preferences.value.default_dashboard_tab) === String(deleteId)) {
-    await saveDashboardPreference({ default_dashboard_tab: nextId || null })
-  }
   if (nextId) {
     await selectTab(nextId)
-  }
-}
-
-async function saveDashboardPreference(patch) {
-  const res = await saveDashboardPreferences(patch)
-  preferences.value = {
-    ...preferences.value,
-    ...(res.data || {}),
   }
 }
 
@@ -1246,7 +1212,6 @@ onMounted(async () => {
   const routeSelectedId = typeof window !== 'undefined'
     ? window.localStorage.getItem(accountStorageKey(DASHBOARD_SELECTED_KEY))
     : null
-  await loadPreferences()
   await loadTabs()
   if (routeSelectedId) restoreDashboardSnapshot(routeSelectedId, { restoreFilters: false })
   syncFiltersFromTab(true, true)
