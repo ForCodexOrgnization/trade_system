@@ -8,7 +8,7 @@
     <div class="card toolbar raw-toolbar">
       <input v-model="filters.query" type="text" placeholder="Exec ID / Order ID / Symbol" />
       <input v-model="filters.symbol" type="text" placeholder="Symbol" />
-      <input v-model="filters.account" type="text" placeholder="Account" />
+      <div class="raw-account-boundary" title="Controlled by the global account switcher">{{ activeAccountCode }}</div>
       <select v-model="filters.side">
         <option value="">All Side</option>
         <option value="BUY">BUY</option>
@@ -49,11 +49,13 @@ import { onMounted, ref } from 'vue'
 import { fetchRawExecutions } from '../api/trades'
 import { responseCount, responseRows } from '../api/pagination'
 import PaginationControls from '../components/PaginationControls.vue'
+import { useAccounts } from '../state/accounts'
 
 const rows = ref([])
 const page = ref(1)
 const totalCount = ref(0)
-const filters = ref({ query: '', symbol: '', account: '', side: '', sec_type: '', date_from: '', date_to: '' })
+const { activeAccountCode } = useAccounts()
+const filters = ref({ query: '', symbol: '', side: '', sec_type: '', date_from: '', date_to: '' })
 
 async function loadRows(nextPage = 1) {
   page.value = nextPage
@@ -65,7 +67,7 @@ async function loadRows(nextPage = 1) {
 }
 
 function resetFilters() {
-  filters.value = { query: '', symbol: '', account: '', side: '', sec_type: '', date_from: '', date_to: '' }
+  filters.value = { query: '', symbol: '', side: '', sec_type: '', date_from: '', date_to: '' }
   loadRows(1)
 }
 

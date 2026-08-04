@@ -8,6 +8,11 @@ class ActiveTradeGroupManager(models.Manager):
 
 class RawIBKRExecution(models.Model):
     sync_job = models.ForeignKey('syncs.SyncJob', on_delete=models.SET_NULL, null=True, blank=True)
+    broker_account = models.ForeignKey(
+        'common.BrokerAccount',
+        on_delete=models.PROTECT,
+        related_name='raw_executions',
+    )
     broker = models.CharField(max_length=20, default='ibkr')
     execution_id = models.CharField(max_length=128, blank=True, null=True)
     perm_id = models.CharField(max_length=128, blank=True, null=True)
@@ -42,6 +47,21 @@ class RawIBKRExecution(models.Model):
     def __str__(self):
         return f"{self.symbol} {self.side} {self.quantity} @ {self.price}"
 
+    def save(self, *args, **kwargs):
+        if not self.broker_account_id:
+            from apps.common.models import BrokerAccount
+
+            account_code = str(self.account or '').strip() or '__legacy_unknown__'
+            self.broker_account, _ = BrokerAccount.objects.get_or_create(
+                broker='ibkr',
+                account_code=account_code,
+                defaults={
+                    'display_name': account_code,
+                    'is_active': account_code != '__legacy_unknown__',
+                },
+            )
+        super().save(*args, **kwargs)
+
 
 class TradeFill(models.Model):
     raw_execution = models.OneToOneField(RawIBKRExecution, on_delete=models.CASCADE, related_name='fill')
@@ -67,6 +87,11 @@ class TradeGroup(models.Model):
         ('closed', 'Closed'),
     ]
 
+    account = models.ForeignKey(
+        'common.BrokerAccount',
+        on_delete=models.PROTECT,
+        related_name='trade_groups',
+    )
     symbol = models.CharField(max_length=64)
     trade_date = models.DateField()
     asset_class = models.CharField(max_length=32, blank=True, null=True)

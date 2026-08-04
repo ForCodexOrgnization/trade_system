@@ -11,6 +11,13 @@ class SyncJob(models.Model):
     ]
 
     source = models.CharField(max_length=50, default='ibkr')
+    broker_account = models.ForeignKey(
+        'common.BrokerAccount',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sync_jobs',
+    )
     job_type = models.CharField(max_length=50, default='full_sync')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     started_at = models.DateTimeField(null=True, blank=True)

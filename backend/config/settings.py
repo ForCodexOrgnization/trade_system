@@ -9,14 +9,18 @@ load_dotenv(BASE_DIR / '.env')
 
 IBKR_FLEX_TOKEN = os.environ.get("IBKR_FLEX_TOKEN", "")
 IBKR_FLEX_QUERY_ID = os.environ.get("IBKR_FLEX_QUERY_ID", "")
+_ibkr_flex_history_years = os.environ.get("IBKR_FLEX_HISTORY_YEARS", "").strip()
+IBKR_FLEX_HISTORY_YEARS = int(_ibkr_flex_history_years) if _ibkr_flex_history_years else None
+IBKR_FLEX_USER_AGENT = os.environ.get("IBKR_FLEX_USER_AGENT", "IBKRTradeJournal/1.0")
+IBKR_CREDENTIAL_ENCRYPTION_KEY = os.environ.get("IBKR_CREDENTIAL_ENCRYPTION_KEY", "")
 
 IBKR_FLEX_SEND_REQUEST_URL = (
-    "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
-    "FlexStatementService.SendRequest"
+    "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/"
+    "SendRequest"
 )
 IBKR_FLEX_GET_STATEMENT_URL = (
-    "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
-    "FlexStatementService.GetStatement"
+    "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/"
+    "GetStatement"
 )
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
