@@ -6,6 +6,7 @@ from datetime import datetime
 from django.conf import settings
 from django.db import connection
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -13,6 +14,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.accounts import resolve_request_account
 from apps.trades.models import RawIBKRExecution
 from apps.trades.models import TradeGroup
 from .models import DailyReview, MistakeTag, PositionCheckpoint, PreTradePlan, SetupSnapshot, SetupTag, TradeJournal, TradeReview
@@ -44,6 +46,13 @@ DEFAULT_MISTAKE_TAGS = [
 ]
 
 
+class AccountScopedMixin:
+    def get_request_account(self):
+        if not hasattr(self, '_resolved_request_account'):
+            self._resolved_request_account = resolve_request_account(self.request)
+        return self._resolved_request_account
+
+
 def _trade_review_column_exists(column_name):
     table_name = TradeReview._meta.db_table
     with connection.cursor() as cursor:
@@ -70,12 +79,12 @@ def _daily_review_column_exists(column_name):
     return column_name in columns
 
 
-class DailyReviewViewSet(viewsets.ModelViewSet):
+class DailyReviewViewSet(AccountScopedMixin, viewsets.ModelViewSet):
     queryset = DailyReview.objects.all().order_by('-review_date', '-updated_at')
     serializer_class = DailyReviewSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(account=self.get_request_account())
         review_date = self.request.query_params.get('date')
         date_from = self.request.query_params.get('date_from')
         date_to = self.request.query_params.get('date_to')
@@ -91,11 +100,13 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
         return qs
 
     def create(self, request, *args, **kwargs):
+        account = self.get_request_account()
         payload = request.data.copy()
+        payload['account'] = account.id
         if not payload.get('review_date'):
             payload['review_date'] = timezone.localdate().isoformat()
 
-        existing = DailyReview.objects.filter(review_date=payload['review_date']).first()
+        existing = DailyReview.objects.filter(account=account, review_date=payload['review_date']).first()
         if existing:
             serializer = self.get_serializer(existing, data=payload, partial=True)
             serializer.is_valid(raise_exception=True)
@@ -107,20 +118,26 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    def perform_update(self, serializer):
+        serializer.save(account=self.get_request_account())
+
     @action(detail=False, methods=['get'], url_path='review-queue')
     def review_queue(self, request):
+        account = self.get_request_account()
         selected_date = request.query_params.get('date') or timezone.localdate().isoformat()
         closed_trades = TradeGroup.objects.filter(
             Q(closed_at__date=selected_date) | Q(trade_date=selected_date, status='closed'),
+            account=account,
             status='closed',
         ).order_by('closed_at', 'id')
         open_positions = TradeGroup.objects.filter(
+            account=account,
             status='open',
         ).filter(
             Q(opened_at__date__lte=selected_date) | Q(trade_date__lte=selected_date),
         ).exclude(open_qty=Decimal('0')).order_by('opened_at', 'id')
 
-        daily_review = DailyReview.objects.filter(review_date=selected_date).first()
+        daily_review = DailyReview.objects.filter(account=account, review_date=selected_date).first()
 
         def _hold_minutes(group):
             if not group.opened_at or not group.closed_at:
@@ -165,7 +182,7 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
         trade_review_enabled = _trade_review_column_exists('would_take_again')
         for group in closed_trades:
             trade_review = getattr(group, 'trade_review', None) if trade_review_enabled else None
-            pretrade = PreTradePlan.objects.filter(plan_date=selected_date).first()
+            pretrade = PreTradePlan.objects.filter(account=account, plan_date=selected_date).first()
             snapshot = None
             snapshot_options = []
             if pretrade:
@@ -197,7 +214,10 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
                 broke_stop_rule = (group.direction == 'long' and actual_exit < selected_snapshot.planned_stop) or (group.direction == 'short' and actual_exit > selected_snapshot.planned_stop)
             if selected_snapshot and trade_review and trade_review.setup:
                 setup_match = trade_review.setup.name.lower().startswith(selected_snapshot.setup_type.lower())
-            executions_qs = RawIBKRExecution.objects.filter(symbol=group.symbol)
+            executions_qs = RawIBKRExecution.objects.filter(
+                account=account.account_code,
+                symbol=group.symbol,
+            )
             if group.opened_at:
                 executions_qs = executions_qs.filter(executed_at__gte=group.opened_at)
             else:
@@ -273,6 +293,7 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='trade-options')
     def trade_options(self, request):
+        account = self.get_request_account()
         review_date = request.query_params.get('date')
         if not review_date:
             return Response([])
@@ -280,7 +301,8 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
             TradeGroup.objects.filter(
                 Q(trade_date=review_date)
                 | Q(opened_at__date=review_date)
-                | Q(closed_at__date=review_date)
+                | Q(closed_at__date=review_date),
+                account=account,
             )
             .order_by('opened_at', 'id')
         )
@@ -300,21 +322,23 @@ class DailyReviewViewSet(viewsets.ModelViewSet):
         return Response(data)
 
 
-class TradeJournalViewSet(viewsets.ModelViewSet):
+class TradeJournalViewSet(AccountScopedMixin, viewsets.ModelViewSet):
     queryset = TradeJournal.objects.select_related('trade_group').all().order_by('-updated_at', '-id')
     serializer_class = TradeJournalSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(trade_group__account=self.get_request_account())
         trade_group_id = self.request.query_params.get('trade_group')
         if trade_group_id:
             qs = qs.filter(trade_group_id=trade_group_id)
         return qs
 
     def create(self, request, *args, **kwargs):
+        account = self.get_request_account()
         trade_group_id = request.data.get('trade_group')
         if trade_group_id:
-            instance = TradeJournal.objects.filter(trade_group_id=trade_group_id).first()
+            get_object_or_404(TradeGroup, id=trade_group_id, account=account)
+            instance = TradeJournal.objects.filter(trade_group_id=trade_group_id, trade_group__account=account).first()
             if instance:
                 serializer = self.get_serializer(instance, data=request.data, partial=True)
                 serializer.is_valid(raise_exception=True)
@@ -323,14 +347,16 @@ class TradeJournalViewSet(viewsets.ModelViewSet):
         return super().create(request, *args, **kwargs)
 
 
-class TradeReviewViewSet(viewsets.ModelViewSet):
+class TradeReviewViewSet(AccountScopedMixin, viewsets.ModelViewSet):
     queryset = TradeReview.objects.select_related('trade_group', 'daily_review', 'setup').prefetch_related('mistake_tags').all()
     serializer_class = TradeReviewSerializer
 
     def get_queryset(self):
         if not _trade_review_schema_ready():
             return TradeReview.objects.none()
-        qs = super().get_queryset().order_by('-updated_at', '-id')
+        qs = super().get_queryset().filter(
+            trade_group__account=self.get_request_account(),
+        ).order_by('-updated_at', '-id')
         trade_group_id = self.request.query_params.get('trade_group')
         daily_review_id = self.request.query_params.get('daily_review')
         if trade_group_id:
@@ -354,7 +380,12 @@ class TradeReviewViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'TradeReview schema is not ready. Please run migrations.'}, status=status.HTTP_409_CONFLICT)
         trade_group_id = request.data.get('trade_group')
         if trade_group_id:
-            instance = TradeReview.objects.filter(trade_group_id=trade_group_id).first()
+            account = self.get_request_account()
+            get_object_or_404(TradeGroup, id=trade_group_id, account=account)
+            instance = TradeReview.objects.filter(
+                trade_group_id=trade_group_id,
+                trade_group__account=account,
+            ).first()
             if instance:
                 serializer = self.get_serializer(instance, data=request.data, partial=True)
                 serializer.is_valid(raise_exception=True)
@@ -566,12 +597,12 @@ class TradeReviewViewSet(viewsets.ModelViewSet):
         })
 
 
-class PositionCheckpointViewSet(viewsets.ModelViewSet):
+class PositionCheckpointViewSet(AccountScopedMixin, viewsets.ModelViewSet):
     queryset = PositionCheckpoint.objects.select_related('trade_group').all().order_by('-review_date', '-updated_at')
     serializer_class = PositionCheckpointSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(trade_group__account=self.get_request_account())
         review_date = self.request.query_params.get('date')
         trade_group_id = self.request.query_params.get('trade_group')
         status_value = self.request.query_params.get('status')
@@ -582,6 +613,14 @@ class PositionCheckpointViewSet(viewsets.ModelViewSet):
         if status_value:
             qs = qs.filter(status=status_value)
         return qs
+
+    def perform_create(self, serializer):
+        self.get_request_account()
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self.get_request_account()
+        serializer.save()
 
 
 class SetupTagViewSet(viewsets.ReadOnlyModelViewSet):
@@ -605,12 +644,12 @@ class MistakeTagViewSet(viewsets.ModelViewSet):
         return MistakeTag.objects.all().order_by('name')
 
 
-class PreTradePlanViewSet(viewsets.ModelViewSet):
+class PreTradePlanViewSet(AccountScopedMixin, viewsets.ModelViewSet):
     queryset = PreTradePlan.objects.all().order_by('-plan_date', '-updated_at')
     serializer_class = PreTradePlanSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(account=self.get_request_account())
         plan_date = self.request.query_params.get('date')
         session = self.request.query_params.get('session')
         if plan_date:
@@ -619,13 +658,19 @@ class PreTradePlanViewSet(viewsets.ModelViewSet):
             qs = qs.filter(session=session)
         return qs
 
+    def perform_create(self, serializer):
+        serializer.save(account=self.get_request_account())
 
-class SetupSnapshotViewSet(viewsets.ModelViewSet):
+    def perform_update(self, serializer):
+        serializer.save(account=self.get_request_account())
+
+
+class SetupSnapshotViewSet(AccountScopedMixin, viewsets.ModelViewSet):
     queryset = SetupSnapshot.objects.select_related('pretrade_plan', 'setup', 'trade_group').all().order_by('-updated_at', '-id')
     serializer_class = SetupSnapshotSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(pretrade_plan__account=self.get_request_account())
         plan_id = self.request.query_params.get('pretrade_plan')
         symbol = self.request.query_params.get('symbol')
         if plan_id:
@@ -633,6 +678,14 @@ class SetupSnapshotViewSet(viewsets.ModelViewSet):
         if symbol:
             qs = qs.filter(symbol__iexact=symbol)
         return qs
+
+    def perform_create(self, serializer):
+        self.get_request_account()
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self.get_request_account()
+        serializer.save()
 
 
 class DailyReviewImageUploadAPIView(APIView):

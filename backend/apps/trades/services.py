@@ -9,6 +9,7 @@ from django.db import connection
 from django.db import transaction
 from django.utils import timezone
 
+from apps.common.models import BrokerAccount
 from .models import RawIBKRExecution, TradeFill, TradeGroup, TradeLotSnapshot, TradeMatchedLot
 
 
@@ -54,8 +55,21 @@ def _has_trade_matched_lot_table():
         return TradeMatchedLot._meta.db_table in connection.introspection.table_names(cursor)
 
 
+def _has_trade_group_account_column():
+    with connection.cursor() as cursor:
+        columns = {
+            item.name
+            for item in connection.introspection.get_table_description(
+                cursor,
+                TradeGroup._meta.db_table,
+            )
+        }
+    return 'account_id' in columns
+
+
 def _group_signature(
     *,
+    account_code,
     symbol,
     asset_class,
     status,
@@ -71,6 +85,7 @@ def _group_signature(
     Deterministic identity used to retain existing TradeGroup ids across rebuilds.
     """
     return (
+        account_code or '',
         symbol or '',
         asset_class or '',
         status or '',
@@ -84,7 +99,7 @@ def _group_signature(
     )
 
 
-def _group_lifecycle_key(*, symbol, asset_class, direction, opened_at, closed_at):
+def _group_lifecycle_key(*, account_code, symbol, asset_class, direction, opened_at, closed_at):
     """
     Lifecycle identity for strategy-style trade groups.
 
@@ -92,6 +107,7 @@ def _group_lifecycle_key(*, symbol, asset_class, direction, opened_at, closed_at
     ids (and attached reviews/journal data) even when calculation logic evolves.
     """
     return (
+        account_code or '',
         symbol or '',
         asset_class or '',
         (direction or '').lower(),
@@ -520,6 +536,7 @@ def _prepare_rebuild_fills(fills):
 
 def _new_trade_bucket(fill, direction: str):
     return {
+        'account_code': getattr(getattr(fill, 'raw_execution', None), 'account', None) or '',
         'symbol': fill.symbol,
         'asset_class': fill.asset_class,
         'opened_at': fill.executed_at,
@@ -592,6 +609,7 @@ def _finalize_bucket(bucket, *, force_open=False):
             realized_pnl = (entry_avg - exit_avg) * qty_for_pnl * bucket['multiplier']
 
     return {
+        'account_code': bucket['account_code'],
         'symbol': bucket['symbol'],
         'asset_class': bucket['asset_class'],
         'total_buy_qty': bucket['buy_qty'],
@@ -643,6 +661,7 @@ def _spread_leg_delta(fill):
 
 def _new_spread_vector_bucket(fill):
     return {
+        'account_code': getattr(getattr(fill, 'raw_execution', None), 'account', None) or '',
         'symbol': fill.symbol,
         'asset_class': fill.asset_class,
         'opened_at': fill.executed_at,
@@ -709,6 +728,7 @@ def _finalize_spread_vector_bucket(bucket, *, force_open=False):
     realized_pnl = bucket['cashflow'] * bucket['multiplier'] if is_closed else ZERO
 
     return {
+        'account_code': bucket['account_code'],
         'symbol': display_symbol,
         'asset_class': bucket['asset_class'],
         'total_buy_qty': bucket['buy_qty'],
@@ -894,12 +914,42 @@ def rebuild_all_trade_groups():
     fills = _prepare_rebuild_fills(fills)
 
     has_matched_lot_table = _has_trade_matched_lot_table()
+    if not fills:
+        TradeLotSnapshot.objects.all().delete()
+        if has_matched_lot_table:
+            TradeMatchedLot.objects.all().delete()
+        if _has_trade_group_account_column():
+            TradeGroup.all_objects.all().delete()
+        else:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DELETE FROM {TradeGroup._meta.db_table}')
+        return
+
+    account_codes = sorted({
+        str(getattr(fill.raw_execution, 'account', '') or '').strip()
+        for fill in fills
+        if str(getattr(fill.raw_execution, 'account', '') or '').strip()
+    })
+    accounts_by_code = {}
+    for account_code in account_codes:
+        accounts_by_code[account_code], _ = BrokerAccount.objects.get_or_create(
+            broker='ibkr',
+            account_code=account_code,
+            defaults={'display_name': account_code, 'is_active': True},
+        )
+    if any(not str(getattr(fill.raw_execution, 'account', '') or '').strip() for fill in fills):
+        accounts_by_code[''], _ = BrokerAccount.objects.get_or_create(
+            broker='ibkr',
+            account_code='__legacy_unknown__',
+            defaults={'display_name': 'Legacy unknown account', 'is_active': False},
+        )
 
     existing_groups = list(TradeGroup.all_objects.all().order_by('id'))
     existing_by_signature = defaultdict(list)
     existing_by_lifecycle = defaultdict(list)
     for group in existing_groups:
         lifecycle_key = _group_lifecycle_key(
+            account_code=group.account.account_code,
             symbol=group.symbol,
             asset_class=group.asset_class,
             direction=group.direction,
@@ -909,6 +959,7 @@ def rebuild_all_trade_groups():
         existing_by_lifecycle[lifecycle_key].append(group)
 
         signature = _group_signature(
+            account_code=group.account.account_code,
             symbol=group.symbol,
             asset_class=group.asset_class,
             status=group.status,
@@ -922,19 +973,13 @@ def rebuild_all_trade_groups():
         )
         existing_by_signature[signature].append(group)
 
-    if not fills:
-        TradeLotSnapshot.objects.all().delete()
-        if has_matched_lot_table:
-            TradeMatchedLot.objects.all().delete()
-        TradeGroup.all_objects.all().delete()
-        return
-
     trade_buckets = _build_trade_buckets(fills)
 
     retained_group_ids = set()
     for bucket in sorted(
         trade_buckets,
         key=lambda item: (
+            item['account_code'],
             item['closed_at'] or item['last_fill_at'] or item['opened_at'],
             item['symbol'],
             item['opened_at'],
@@ -954,6 +999,7 @@ def rebuild_all_trade_groups():
             avg_sell_price = bucket['sell_notional'] / bucket['total_sell_qty']
 
         signature = _group_signature(
+            account_code=bucket['account_code'],
             symbol=bucket['symbol'],
             asset_class=bucket['asset_class'],
             status=bucket['status'],
@@ -966,6 +1012,7 @@ def rebuild_all_trade_groups():
             closed_at=bucket['closed_at'],
         )
         lifecycle_key = _group_lifecycle_key(
+            account_code=bucket['account_code'],
             symbol=bucket['symbol'],
             asset_class=bucket['asset_class'],
             direction=bucket['direction'],
@@ -977,6 +1024,7 @@ def rebuild_all_trade_groups():
             candidates = existing_by_signature.get(signature) or []
         group = candidates.pop(0) if candidates else None
         payload = {
+            'account': accounts_by_code[bucket['account_code']],
             'symbol': bucket['symbol'],
             'trade_date': group_trade_date,
             'asset_class': bucket['asset_class'],

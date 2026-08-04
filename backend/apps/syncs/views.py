@@ -7,6 +7,7 @@ from rest_framework.generics import ListAPIView
 
 from apps.brokers.ibkr_client import IBKRClient
 from apps.brokers.services import IBKRSyncService
+from apps.common.models import BrokerAccount
 from apps.trades.models import RawIBKRExecution
 from apps.trades.services import rebuild_all_trade_groups
 from .models import SyncJob
@@ -97,6 +98,10 @@ class DeleteIBKRAccountDataAPIView(APIView):
         # Raw executions cascade to fills. Rebuild groups from the accounts that remain
         # so deleted-account positions and PnL cannot remain visible in the dashboard.
         rebuild_all_trade_groups()
+        BrokerAccount.objects.filter(
+            broker='ibkr',
+            account_code=account,
+        ).update(is_active=False)
         return Response({'account': account, 'deleted_execution_count': deleted_execution_count})
 
 

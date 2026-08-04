@@ -1,6 +1,27 @@
 from django.db import models
 
 
+class BrokerAccount(models.Model):
+    broker = models.CharField(max_length=20, default="ibkr")
+    account_code = models.CharField(max_length=64)
+    display_name = models.CharField(max_length=120, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["broker", "account_code"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["broker", "account_code"],
+                name="unique_broker_account_code",
+            ),
+        ]
+
+    def __str__(self):
+        return self.display_name or self.account_code
+
+
 class DashboardTab(models.Model):
     name = models.CharField(max_length=80, default="Overview")
     sort_order = models.PositiveIntegerField(default=0)

@@ -10,6 +10,7 @@ from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
+from apps.common.accounts import resolve_request_account
 from .models import RawIBKRExecution, TradeGroup
 from .serializers import TradeGroupSerializer, RawIBKRExecutionSerializer
 from apps.journal.models import TradeReview
@@ -86,8 +87,13 @@ def _latest_groups_by_symbol(groups):
 
 class TradeGroupViewSet(ReadOnlyModelViewSet):
     serializer_class = TradeGroupSerializer
-    queryset = TradeGroup.objects.all().order_by('-trade_date', '-id')
+    queryset = TradeGroup.objects.select_related('account').all().order_by('-trade_date', '-id')
     pagination_class = StandardPageNumberPagination
+
+    def _request_account(self):
+        if not hasattr(self, '_resolved_request_account'):
+            self._resolved_request_account = resolve_request_account(self.request)
+        return self._resolved_request_account
 
     def _normalized_date_params(self):
         qp = self.request.query_params
@@ -103,7 +109,7 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
         raw_qs = RawIBKRExecution.objects.all().order_by('executed_at', 'id')
 
         symbol = _clean_filter_param('symbol', qp.get('symbol') or qp.get('q'))
-        account = _clean_filter_param('account', qp.get('account'))
+        account = self._request_account().account_code
         asset_class = _clean_filter_param('asset_class', qp.get('asset_class') or qp.get('sec_type'))
         strategy = _clean_filter_param('strategy', qp.get('strategy'))
         side = _clean_filter_param('side', qp.get('side'))
@@ -145,7 +151,7 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
         symbol = _clean_filter_param('symbol', qp.get('symbol') or qp.get('q'))
         status_ = _clean_filter_param('status', qp.get('status'))
         asset_class = _clean_filter_param('asset_class', qp.get('asset_class'))
-        account = _clean_filter_param('account', qp.get('account'))
+        account = self._request_account().account_code
         strategy = _clean_filter_param('strategy', qp.get('strategy'))
 
         if trade_date:
@@ -160,8 +166,9 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
             qs = qs.filter(status=status_)
         if asset_class:
             qs = qs.filter(asset_class=asset_class)
+        qs = qs.filter(account__broker='ibkr', account__account_code=account, account__is_active=True)
 
-        if account or strategy:
+        if strategy:
             raw_items = self._filtered_raw_executions()
             if not raw_items:
                 return qs.none()
@@ -171,6 +178,7 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
                 matched = [
                     item for item in raw_items
                     if item.symbol == group.symbol
+                    and item.account == group.account.account_code
                     and (not group.opened_at or item.executed_at >= group.opened_at)
                     and (not group.closed_at or item.executed_at <= group.closed_at)
                 ]
@@ -184,8 +192,10 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='filter-options')
     def filter_options(self, request):
-        raw_items = list(RawIBKRExecution.objects.all())
-        accounts = sorted({item.account for item in raw_items if item.account})
+        all_raw_items = list(RawIBKRExecution.objects.all())
+        accounts = sorted({item.account for item in all_raw_items if item.account})
+        selected_account = _clean_filter_param('account', request.query_params.get('account'))
+        raw_items = [item for item in all_raw_items if not selected_account or item.account == selected_account]
         symbols = sorted({item.symbol for item in raw_items if item.symbol})
         strategies = sorted({_extract_strategy_from_payload(item.raw_payload) for item in raw_items if _extract_strategy_from_payload(item.raw_payload)})
         asset_classes = sorted({item.sec_type for item in raw_items if item.sec_type})
@@ -561,7 +571,7 @@ class RawExecutionListAPIView(ListAPIView):
         qs = super().get_queryset()
         symbol = self.request.query_params.get('symbol')
         side = self.request.query_params.get('side')
-        account = self.request.query_params.get('account')
+        account = resolve_request_account(self.request).account_code
         sec_type = self.request.query_params.get('sec_type') or self.request.query_params.get('asset_class')
         date_from = self.request.query_params.get('date_from') or self.request.query_params.get('start')
         date_to = self.request.query_params.get('date_to') or self.request.query_params.get('end')
@@ -572,8 +582,7 @@ class RawExecutionListAPIView(ListAPIView):
             qs = qs.filter(symbol__icontains=symbol)
         if side:
             qs = qs.filter(side=side)
-        if account:
-            qs = qs.filter(account__icontains=account)
+        qs = qs.filter(account__iexact=account)
         if sec_type:
             qs = qs.filter(sec_type=sec_type)
         if date_from:

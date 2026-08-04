@@ -6,8 +6,8 @@ from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import DashboardPreference, DashboardTab, StrategyOption
-from .serializers import DashboardPreferenceSerializer, DashboardTabSerializer, StrategyOptionSerializer
+from .models import BrokerAccount, DashboardPreference, DashboardTab, StrategyOption
+from .serializers import BrokerAccountSerializer, DashboardPreferenceSerializer, DashboardTabSerializer, StrategyOptionSerializer
 
 DEFAULT_WIDGETS = [
     "overviewCards",
@@ -32,6 +32,11 @@ class ServiceUnavailable(APIException):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     default_detail = "Service unavailable."
     default_code = "service_unavailable"
+
+
+class BrokerAccountViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = BrokerAccountSerializer
+    queryset = BrokerAccount.objects.filter(is_active=True).order_by("broker", "account_code")
 
 
 def ensure_default_tab():

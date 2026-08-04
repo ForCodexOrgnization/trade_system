@@ -167,6 +167,7 @@ class IBKRSyncServiceTests(SimpleTestCase):
         with (
             patch.object(IBKRSyncService, '_build_pre_sync_snapshot', return_value={}),
             patch('apps.brokers.services.transaction.atomic', side_effect=nullcontext),
+            patch('apps.brokers.services.BrokerAccount.objects.update_or_create'),
             patch('apps.brokers.services.RawIBKRExecution.objects.create', return_value=raw_execution),
             patch('apps.brokers.services.create_fill_from_raw'),
             patch('apps.brokers.services.rebuild_trade_groups_for_dates'),

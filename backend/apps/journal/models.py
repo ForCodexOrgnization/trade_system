@@ -24,6 +24,11 @@ class DailyReview(models.Model):
         ('completed', 'Completed'),
     ]
 
+    account = models.ForeignKey(
+        'common.BrokerAccount',
+        on_delete=models.PROTECT,
+        related_name='daily_reviews',
+    )
     review_date = models.DateField(default=timezone.localdate, db_index=True)
     review_status = models.CharField(max_length=16, choices=REVIEW_STATUS_CHOICES, default='draft')
     strategy = models.CharField(max_length=128, blank=True, default='')
@@ -192,6 +197,11 @@ class PreTradePlan(models.Model):
         ('close', 'Close'),
     ]
 
+    account = models.ForeignKey(
+        'common.BrokerAccount',
+        on_delete=models.PROTECT,
+        related_name='pretrade_plans',
+    )
     plan_date = models.DateField(default=timezone.localdate, db_index=True)
     session = models.CharField(max_length=16, choices=SESSION_CHOICES, default='premarket')
     market_regime = models.CharField(max_length=64, blank=True, default='')
@@ -206,6 +216,12 @@ class PreTradePlan(models.Model):
 
     class Meta:
         ordering = ['-plan_date', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'plan_date'],
+                name='unique_pretrade_plan_per_account_date',
+            ),
+        ]
 
 
 class SetupSnapshot(models.Model):

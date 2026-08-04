@@ -67,6 +67,11 @@ class TradeGroup(models.Model):
         ('closed', 'Closed'),
     ]
 
+    account = models.ForeignKey(
+        'common.BrokerAccount',
+        on_delete=models.PROTECT,
+        related_name='trade_groups',
+    )
     symbol = models.CharField(max_length=64)
     trade_date = models.DateField()
     asset_class = models.CharField(max_length=32, blank=True, null=True)

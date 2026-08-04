@@ -1,5 +1,6 @@
 from django.db import IntegrityError, transaction
 
+from apps.common.models import BrokerAccount
 from apps.syncs.models import SyncJob
 from apps.trades.models import RawIBKRExecution, TradeGroup
 from apps.trades.services import create_fill_from_raw, rebuild_trade_groups_for_dates
@@ -87,6 +88,12 @@ class IBKRSyncService:
 
         rows = self.client.fetch_all_executions()
         accounts = sorted({str(row.get('account')).strip() for row in rows if row.get('account')})
+        for account_code in accounts:
+            BrokerAccount.objects.update_or_create(
+                broker='ibkr',
+                account_code=account_code,
+                defaults={'display_name': account_code, 'is_active': True},
+            )
         sync_job.metadata = {
             **(sync_job.metadata or {}),
             'accounts': accounts,

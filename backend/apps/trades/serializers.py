@@ -80,6 +80,7 @@ class TradeMatchedLotSerializer(serializers.ModelSerializer):
 
 
 class TradeGroupSerializer(serializers.ModelSerializer):
+    account_code = serializers.CharField(source='account.account_code', read_only=True)
     lot_snapshots = TradeLotSnapshotSerializer(many=True, read_only=True)
     matched_lots = TradeMatchedLotSerializer(many=True, read_only=True)
     raw_executions = serializers.SerializerMethodField()
@@ -114,7 +115,10 @@ class TradeGroupSerializer(serializers.ModelSerializer):
                 close_side = 'BUY' if lot_side == 'SHORT' else 'SELL'
                 lot_query |= Q(symbol=obj.symbol, executed_at=lot.opened_at, side=open_side, price=lot.open_price)
                 lot_query |= Q(symbol=obj.symbol, executed_at=lot.closed_at, side=close_side, price=lot.close_price)
-            return RawIBKRExecution.objects.filter(lot_query).order_by('executed_at', 'id')
+            return RawIBKRExecution.objects.filter(
+                lot_query,
+                account=obj.account.account_code,
+            ).order_by('executed_at', 'id')
 
         leg_symbols = _spread_leg_symbols(obj.symbol)
         if leg_symbols:
@@ -122,6 +126,7 @@ class TradeGroupSerializer(serializers.ModelSerializer):
         else:
             qs = RawIBKRExecution.objects.filter(symbol=obj.symbol)
         qs = _bound_group_queryset_to_trade_window(qs, obj, is_spread=bool(leg_symbols))
+        qs = qs.filter(account=obj.account.account_code)
         return qs.order_by('executed_at', 'id')
 
     def _group_fills_queryset(self, obj):
@@ -134,7 +139,10 @@ class TradeGroupSerializer(serializers.ModelSerializer):
                 close_side = 'BUY' if lot_side == 'SHORT' else 'SELL'
                 lot_query |= Q(symbol=obj.symbol, executed_at=lot.opened_at, side=open_side, price=lot.open_price)
                 lot_query |= Q(symbol=obj.symbol, executed_at=lot.closed_at, side=close_side, price=lot.close_price)
-            return TradeFill.objects.filter(lot_query).order_by('executed_at', 'id')
+            return TradeFill.objects.filter(
+                lot_query,
+                raw_execution__account=obj.account.account_code,
+            ).order_by('executed_at', 'id')
 
         leg_symbols = _spread_leg_symbols(obj.symbol)
         if leg_symbols:
@@ -142,6 +150,7 @@ class TradeGroupSerializer(serializers.ModelSerializer):
         else:
             qs = TradeFill.objects.filter(symbol=obj.symbol)
         qs = _bound_group_queryset_to_trade_window(qs, obj, is_spread=bool(leg_symbols))
+        qs = qs.filter(raw_execution__account=obj.account.account_code)
         return qs.order_by('executed_at', 'id')
 
     def get_raw_executions(self, obj):

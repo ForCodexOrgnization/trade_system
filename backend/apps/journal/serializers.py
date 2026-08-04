@@ -13,6 +13,13 @@ from .models import (
 )
 
 
+def _serializer_request_account(serializer):
+    view = serializer.context.get('view')
+    if view and hasattr(view, 'get_request_account'):
+        return view.get_request_account()
+    return None
+
+
 class DailyReviewImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyReviewImage
@@ -43,6 +50,17 @@ class DailyReviewSerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyReview
         fields = '__all__'
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        account = _serializer_request_account(self) or attrs.get('account') or getattr(self.instance, 'account', None)
+        groups = list(attrs.get('related_trade_groups', []))
+        direct_group = attrs.get('related_trade_group')
+        if direct_group:
+            groups.append(direct_group)
+        if account and any(group.account_id != account.id for group in groups):
+            raise serializers.ValidationError('All related trades must belong to the review account.')
+        return attrs
 
     def _trade_group_display(self, trade_group):
         return {
@@ -101,6 +119,14 @@ class TradeJournalSerializer(serializers.ModelSerializer):
         model = TradeJournal
         fields = '__all__'
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        account = _serializer_request_account(self)
+        trade_group = attrs.get('trade_group') or getattr(self.instance, 'trade_group', None)
+        if account and trade_group and trade_group.account_id != account.id:
+            raise serializers.ValidationError('The trade belongs to another account.')
+        return attrs
+
     def get_trade_group_display(self, obj):
         group = obj.trade_group
         return {
@@ -131,6 +157,9 @@ class TradeReviewSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         trade_group = attrs.get('trade_group') or getattr(self.instance, 'trade_group', None)
+        request_account = _serializer_request_account(self)
+        if request_account and trade_group and trade_group.account_id != request_account.id:
+            raise serializers.ValidationError('The trade belongs to another account.')
         selected_snapshot = attrs.get('selected_snapshot')
         if not trade_group:
             return attrs
@@ -147,6 +176,8 @@ class TradeReviewSerializer(serializers.ModelSerializer):
         if not symbol_match:
             attrs['resolved_snapshot'] = None
             return attrs
+        if selected_snapshot.pretrade_plan.account_id != trade_group.account_id:
+            raise serializers.ValidationError('The selected snapshot belongs to another account.')
         attrs['resolved_snapshot'] = selected_snapshot
         return attrs
 
@@ -192,6 +223,14 @@ class PositionCheckpointSerializer(serializers.ModelSerializer):
         model = PositionCheckpoint
         fields = '__all__'
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        trade_group = attrs.get('trade_group') or getattr(self.instance, 'trade_group', None)
+        account = _serializer_request_account(self)
+        if account and trade_group and trade_group.account_id != account.id:
+            raise serializers.ValidationError('The trade belongs to another account.')
+        return attrs
+
     def get_trade_group_display(self, obj):
         group = obj.trade_group
         return {
@@ -216,3 +255,14 @@ class SetupSnapshotSerializer(serializers.ModelSerializer):
     class Meta:
         model = SetupSnapshot
         fields = '__all__'
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        plan = attrs.get('pretrade_plan') or getattr(self.instance, 'pretrade_plan', None)
+        trade_group = attrs.get('trade_group') or getattr(self.instance, 'trade_group', None)
+        account = _serializer_request_account(self)
+        if account and plan and plan.account_id != account.id:
+            raise serializers.ValidationError('The pre-trade plan belongs to another account.')
+        if plan and trade_group and plan.account_id != trade_group.account_id:
+            raise serializers.ValidationError('The snapshot and trade must belong to the same account.')
+        return attrs
