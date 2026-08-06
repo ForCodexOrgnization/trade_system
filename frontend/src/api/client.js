@@ -7,7 +7,7 @@ const api = axios.create({
 })
 
 function isAccountScopedRequest(url = '') {
-  return url.startsWith('/trades/') || url.startsWith('/journal/')
+  return url.startsWith('/trades/')
 }
 
 api.interceptors.request.use((config) => {

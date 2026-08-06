@@ -3,15 +3,14 @@
     <div class="page-header detail-header-row">
       <div>
         <h1>Trade Detail</h1>
-        <p>成交明细 + 就地复盘面板（结构化字段）。</p>
+        <p>成交汇总与原始执行记录。</p>
       </div>
       <button class="secondary" @click="goBack">← Back</button>
     </div>
 
     <div v-if="loading" class="card">Loading...</div>
     <template v-else-if="trade">
-      <div class="grid grid-2">
-        <div class="card">
+      <div class="card">
           <div class="section-title">Trade Summary</div>
           <table class="kv-table"><tbody>
             <tr><td>Symbol</td><td>{{ trade.symbol }}</td></tr>
@@ -20,14 +19,6 @@
             <tr><td>Realized PnL</td><td>{{ fmt(trade.realized_pnl) }}</td></tr>
             <tr><td>Commission</td><td>{{ fmt(trade.commission_total) }}</td></tr>
           </tbody></table>
-        </div>
-
-        <div class="card">
-          <div class="section-title">Trade Workspace</div>
-          <div class="muted-copy">
-            Trade Review 统一在 Journal → Review Workspace（Trade Review Cards）中维护。此页仅保留时间线查看，避免双入口重复编辑。
-          </div>
-        </div>
       </div>
 
       <div class="card">
