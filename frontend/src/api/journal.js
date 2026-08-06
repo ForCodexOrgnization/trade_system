@@ -13,8 +13,10 @@ export const reviewJournalContext = (id, payload) => api.post(`/journal/contexts
 
 export const fetchJournalCampaigns = (params = {}) => api.get('/journal/campaigns/', { params })
 export const createJournalCampaign = (payload) => api.post('/journal/campaigns/', payload)
-export const createDecisionSnapshot = (id, payload) => api.post(`/journal/campaigns/${id}/decision-snapshot/`, payload)
+export const updateJournalCampaign = (id, payload) => api.patch(`/journal/campaigns/${id}/`, payload)
+export const createDecisionVersion = (id, payload) => api.post(`/journal/campaigns/${id}/decision-versions/`, payload)
 export const createDecisionUpdate = (id, payload) => api.post(`/journal/campaigns/${id}/decision-updates/`, payload)
+export const createCorrectionRecord = (id, payload) => api.post(`/journal/campaigns/${id}/corrections/`, payload)
 export const activateJournalCampaign = (id) => api.post(`/journal/campaigns/${id}/activate/`)
 export const attachJournalFills = (id, payload) => api.post(`/journal/campaigns/${id}/attach-fills/`, payload)
 export const undoJournalGrouping = (id) => api.post(`/journal/campaigns/${id}/undo-grouping/`)

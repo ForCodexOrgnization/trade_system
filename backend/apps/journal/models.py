@@ -127,6 +127,10 @@ class Campaign(TimestampedModel):
     def has_snapshot(self):
         return hasattr(self, "decision_snapshot")
 
+    @property
+    def has_execution(self):
+        return AttemptFill.objects.filter(attempt__campaign=self).exists()
+
 
 class DecisionSnapshot(TimestampedModel):
     campaign = models.OneToOneField(Campaign, on_delete=models.CASCADE, related_name="decision_snapshot")
@@ -170,6 +174,29 @@ class DecisionSnapshot(TimestampedModel):
         if not self.immutable_snapshot_hash:
             raw = json.dumps(self.canonical_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             self.immutable_snapshot_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        super().save(*args, **kwargs)
+
+
+class DecisionVersion(TimestampedModel):
+    campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name="decision_versions")
+    version_no = models.PositiveSmallIntegerField()
+    observed_evidence = models.JSONField(default=list)
+    interpretation = models.TextField()
+    strongest_counter_case = models.TextField()
+    chosen_action = models.TextField(blank=True, default="")
+    entry_trigger = models.TextField()
+    invalidation = models.TextField()
+    time_stop = models.CharField(max_length=160, blank=True, default="")
+    scenarios = models.JSONField(default=list)
+    change_note = models.CharField(max_length=240, blank=True, default="")
+
+    class Meta:
+        ordering = ["version_no"]
+        constraints = [models.UniqueConstraint(fields=["campaign", "version_no"], name="journal_unique_decision_version")]
+
+    def save(self, *args, **kwargs):
+        if self.pk and DecisionVersion.objects.filter(pk=self.pk).exists():
+            raise ValidationError("Decision versions are append-only.")
         super().save(*args, **kwargs)
 
 
@@ -271,7 +298,7 @@ class DecisionUpdate(TimestampedModel):
     ]
 
     campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name="decision_updates")
-    position_stage = models.CharField(max_length=32, choices=DecisionContext.POSITION_STAGE_CHOICES)
+    position_stage = models.CharField(max_length=32, choices=DecisionContext.POSITION_STAGE_CHOICES, null=True, blank=True)
     event_type = models.CharField(max_length=24, choices=EVENT_CHOICES, default="price_action")
     event_at = models.DateTimeField()
     observed_evidence = models.JSONField(default=list)
@@ -283,6 +310,33 @@ class DecisionUpdate(TimestampedModel):
 
     class Meta:
         ordering = ["event_at", "created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and DecisionUpdate.objects.filter(pk=self.pk).exists():
+            raise ValidationError("Decision updates are append-only.")
+        super().save(*args, **kwargs)
+
+
+class CorrectionRecord(TimestampedModel):
+    TARGET_CHOICES = [
+        ("campaign", "Campaign"), ("decision", "Locked Decision"),
+        ("execution", "Execution"), ("review", "Review"),
+    ]
+
+    campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name="corrections")
+    target_type = models.CharField(max_length=20, choices=TARGET_CHOICES)
+    field_name = models.CharField(max_length=100)
+    original_value = models.JSONField(null=True, blank=True)
+    corrected_value = models.JSONField()
+    reason = models.TextField()
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and CorrectionRecord.objects.filter(pk=self.pk).exists():
+            raise ValidationError("Correction records are append-only.")
+        super().save(*args, **kwargs)
 
 
 class AuditEvent(models.Model):

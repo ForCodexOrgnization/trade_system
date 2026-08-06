@@ -95,7 +95,7 @@
             </div>
 
             <form v-if="showCampaignForm" class="card campaign-builder" @submit.prevent="createCampaign(false)">
-              <div class="builder-head"><div><strong>{{ t('campaignSnapshot') }}</strong><span>{{ t('snapshotImmutableHelp') }}</span></div><button type="button" class="secondary small-btn" @click="showCampaignForm = false">{{ t('close') }}</button></div>
+              <div class="builder-head"><div><strong>{{ editingCampaignId ? t('editDecisionVersion') : t('campaignSnapshot') }}</strong><span>{{ editingCampaignId ? t('versionSaveHelp') : t('preTradeEditableHelp') }}</span></div><button type="button" class="secondary small-btn" @click="showCampaignForm = false; editingCampaignId = ''">{{ t('close') }}</button></div>
               <div class="journal-form-grid four-col">
                 <label><span>{{ t('decisionContext') }}</span><select v-model="campaignForm.context" required @change="syncHorizonToContext"><option v-for="item in contexts" :key="item.id" :value="item.id">{{ item.name }} · {{ enumLabel(item.context_type) }}</option></select></label>
                 <label><span>{{ t('symbol') }}</span><input v-model.trim="campaignForm.symbol" required placeholder="MES" /></label>
@@ -114,6 +114,7 @@
                 <label><span>{{ t('entryTrigger') }}</span><input v-model.trim="campaignForm.entry_trigger" required :placeholder="t('entryTriggerPlaceholder')" /></label>
                 <label><span>{{ t('invalidation') }}</span><input v-model.trim="campaignForm.invalidation" required :placeholder="t('invalidationPlaceholder')" /></label>
                 <label><span>{{ t('timeStop') }}</span><input v-model.trim="campaignForm.time_stop" :placeholder="t('timeStopPlaceholder')" /></label>
+                <label v-if="editingCampaignId"><span>{{ t('changeNote') }}</span><input v-model.trim="campaignForm.change_note" required :placeholder="t('changeNotePlaceholder')" /></label>
               </div>
 
               <div class="scenario-heading"><strong>{{ t('mutuallyExclusiveScenarios') }}</strong><span :class="['probability-total', { valid: probabilityValid }]">{{ t('total') }} {{ probabilityTotal }}%</span></div>
@@ -129,8 +130,8 @@
               </div>
               <button v-if="campaignForm.scenarios.length < 3" type="button" class="secondary small-btn" @click="addScenario">{{ t('addThirdScenario') }}</button>
               <div class="builder-actions">
-                <button type="submit" class="secondary" :disabled="saving || !probabilityValid">{{ t('savePlanned') }}</button>
-                <button type="button" :disabled="saving || !probabilityValid" @click="createCampaign(true)">{{ t('saveAndActivate') }}</button>
+                <button type="submit" class="secondary" :disabled="saving || !probabilityValid">{{ editingCampaignId ? t('saveNewVersion') : t('savePlanned') }}</button>
+                <button v-if="!editingCampaignId" type="button" :disabled="saving || !probabilityValid" @click="createCampaign(true)">{{ t('saveAndActivate') }}</button>
               </div>
             </form>
 
@@ -138,7 +139,7 @@
             <article v-for="campaign in todayCampaigns" :key="campaign.id" class="card campaign-card">
               <div class="campaign-card-top">
                 <div><strong>{{ campaign.symbol }} · {{ campaign.setup }}</strong><div class="muted-copy">{{ enumLabel(campaign.direction) }} · {{ enumLabel(campaign.horizon) }} · {{ campaign.context_name }} · {{ enumLabel(campaign.context_type) }}</div></div>
-                <span :class="['badge', statusClass(campaign.status)]">{{ enumLabel(campaign.status) }}</span>
+                <div class="campaign-badges"><span :class="['badge', phaseClass(campaign.lifecycle?.phase)]">{{ enumLabel(campaign.lifecycle?.phase) }}</span><span :class="['badge', statusClass(campaign.status)]">{{ enumLabel(campaign.status) }}</span></div>
               </div>
               <div class="campaign-stats">
                 <span><small>{{ t('readiness') }}</small><strong>{{ campaign.readiness.score }}%</strong></span>
@@ -146,18 +147,22 @@
                 <span><small>{{ t('result') }}</small><strong :class="numberClass(campaign.result_r)">{{ number(campaign.result_r) }}R</strong></span>
                 <span><small>{{ t('attempts') }}</small><strong>{{ campaign.attempts.length }}/{{ campaign.max_attempts }}</strong></span>
               </div>
-              <div v-if="campaign.decision_snapshot" class="snapshot-summary">
-                <div><span>{{ t('trigger') }}</span><strong>{{ campaign.decision_snapshot.entry_trigger }}</strong></div>
-                <div><span>{{ t('invalidation') }}</span><strong>{{ campaign.decision_snapshot.invalidation }}</strong></div>
-                <div class="scenario-chips"><span v-for="scenario in campaign.decision_snapshot.scenarios" :key="scenario.id">{{ scenario.name }} {{ scenario.probability }}%</span></div>
-                <code>{{ campaign.decision_snapshot.immutable_snapshot_hash.slice(0, 12) }}…</code>
+              <div v-if="campaign.current_decision" class="snapshot-summary">
+                <div><span>{{ t('trigger') }}</span><strong>{{ campaign.current_decision.entry_trigger }}</strong></div>
+                <div><span>{{ t('invalidation') }}</span><strong>{{ campaign.current_decision.invalidation }}</strong></div>
+                <div class="scenario-chips"><span v-for="(scenario, index) in campaign.current_decision.scenarios" :key="scenario.id || index">{{ scenario.name }} {{ scenario.probability }}%</span></div>
+                <code v-if="campaign.decision_snapshot">🔒 {{ campaign.decision_snapshot.immutable_snapshot_hash.slice(0, 12) }}…</code>
+                <code v-else>{{ t('version') }} {{ campaign.lifecycle?.version_count }}</code>
               </div>
               <div class="row-actions">
-                <button v-if="campaign.status === 'planned' && campaign.decision_snapshot" class="secondary small-btn" @click="activateCampaign(campaign)">{{ t('activate') }}</button>
-                <button v-if="campaign.context_kind === 'swing' && ['active', 'paused'].includes(campaign.status)" class="secondary small-btn" @click="openDecisionUpdate(campaign)">{{ t('decisionUpdate') }}</button>
+                <button v-if="campaign.lifecycle?.can_edit_decision && campaign.current_decision" class="secondary small-btn" @click="editCampaign(campaign)">{{ t('editAndSaveVersion') }}</button>
+                <button v-if="campaign.status === 'planned' && campaign.current_decision" class="secondary small-btn" @click="activateCampaign(campaign)">{{ t('activate') }}</button>
+                <button v-if="campaign.lifecycle?.can_add_update" class="secondary small-btn" @click="openDecisionUpdate(campaign)">{{ t('decisionUpdate') }}</button>
                 <button v-if="['active', 'paused'].includes(campaign.status) && campaign.attempts.length" class="secondary small-btn" @click="closeCampaign(campaign)">{{ t('closeCampaign') }}</button>
                 <button v-if="['review_pending', 'closed'].includes(campaign.status)" class="small-btn" @click="openReview(campaign)">{{ t('review') }}</button>
+                <button v-if="campaign.lifecycle?.decision_locked" class="text-button correction-button" @click="openCorrection(campaign)">{{ t('recordCorrection') }}</button>
               </div>
+              <details v-if="campaign.decision_versions?.length" class="version-history"><summary>{{ t('versionHistory') }} · {{ campaign.decision_versions.length }}</summary><div v-for="versionItem in campaign.decision_versions" :key="versionItem.id" class="version-row"><strong>v{{ versionItem.version_no }}</strong><span>{{ shortDateTime(versionItem.created_at) }}</span><span>{{ versionItem.change_note || t('initialVersion') }}</span></div></details>
               <div v-if="campaign.attempts.length" class="attempt-list">
                 <div v-for="attempt in campaign.attempts" :key="attempt.id" class="attempt-row">
                   <strong>#{{ attempt.sequence_no }}</strong><span>{{ enumLabel(attempt.status) }}</span><span>{{ attempt.fills.length }} {{ t('fillsLower') }}</span><span :class="numberClass(attempt.result_r)">{{ number(attempt.result_r) }}R</span>
@@ -165,12 +170,12 @@
               </div>
               <div v-if="campaign.decision_updates?.length" class="decision-update-list">
                 <div v-for="update in campaign.decision_updates" :key="update.id" class="decision-update-row">
-                  <span>{{ shortDateTime(update.event_at) }}</span><strong>{{ enumLabel(update.position_stage) }}</strong><span>{{ enumLabel(update.event_type) }} · {{ update.decision }}</span>
+                  <span>{{ shortDateTime(update.event_at) }}</span><strong>{{ update.position_stage ? enumLabel(update.position_stage) : t('decisionUpdate') }}</strong><span>{{ enumLabel(update.event_type) }} · {{ update.decision }}</span>
                 </div>
               </div>
               <form v-if="decisionUpdateCampaign?.id === campaign.id" class="decision-update-form" @submit.prevent="submitDecisionUpdate">
                 <div class="journal-form-grid three-col">
-                  <label><span>{{ t('positionStage') }}</span><select v-model="decisionUpdateForm.position_stage"><option v-for="item in positionStages" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+                  <label v-if="campaign.context_kind === 'swing'"><span>{{ t('positionStage') }}</span><select v-model="decisionUpdateForm.position_stage"><option v-for="item in positionStages" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
                   <label><span>{{ t('eventType') }}</span><select v-model="decisionUpdateForm.event_type"><option v-for="item in eventTypes" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
                   <label><span>{{ t('eventTime') }}</span><input v-model="decisionUpdateForm.event_at" type="datetime-local" required /></label>
                 </div>
@@ -183,6 +188,17 @@
                   <label><span>{{ t('nextReview') }}</span><input v-model="decisionUpdateForm.next_review_at" type="datetime-local" /></label>
                 </div>
                 <div class="builder-actions"><button type="button" class="secondary" @click="decisionUpdateCampaign = null">{{ t('cancel') }}</button><button :disabled="saving">{{ t('saveDecisionUpdate') }}</button></div>
+              </form>
+              <div v-if="campaign.corrections?.length" class="correction-list"><div v-for="item in campaign.corrections" :key="item.id" class="correction-row"><strong>{{ t('correction') }} · {{ item.field_name }}</strong><span>{{ item.reason }}</span><small>{{ shortDateTime(item.created_at) }}</small></div></div>
+              <form v-if="correctionCampaign?.id === campaign.id" class="decision-update-form correction-form" @submit.prevent="submitCorrection">
+                <div class="journal-form-grid three-col">
+                  <label><span>{{ t('correctionTarget') }}</span><select v-model="correctionForm.target_type"><option value="campaign">Campaign</option><option value="decision">{{ t('lockedDecision') }}</option><option value="execution">Execution</option><option value="review">{{ t('review') }}</option></select></label>
+                  <label><span>{{ t('fieldName') }}</span><input v-model.trim="correctionForm.field_name" required /></label>
+                  <label><span>{{ t('correctionReason') }}</span><input v-model.trim="correctionForm.reason" required /></label>
+                  <label><span>{{ t('originalValue') }}</span><input v-model="correctionForm.original_value" /></label>
+                  <label><span>{{ t('correctedValue') }}</span><input v-model="correctionForm.corrected_value" required /></label>
+                </div>
+                <div class="builder-actions"><button type="button" class="secondary" @click="correctionCampaign = null">{{ t('cancel') }}</button><button :disabled="saving">{{ t('saveCorrection') }}</button></div>
               </form>
             </article>
           </section>
@@ -276,9 +292,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   activateJournalCampaign, attachJournalFills, closeJournalCampaign, closeJournalContext,
-  createDecisionSnapshot, createDecisionUpdate, createJournalCampaign, createJournalContext, createJournalToday,
+  createCorrectionRecord, createDecisionUpdate, createDecisionVersion, createJournalCampaign, createJournalContext, createJournalToday,
   fetchJournalAnalytics, fetchJournalCampaigns, fetchJournalContexts, fetchJournalToday, reviewJournalCampaign,
-  importJournalFills, startJournalContext, undoJournalGrouping,
+  importJournalFills, startJournalContext, undoJournalGrouping, updateJournalCampaign,
 } from '../api/journal'
 import { responseRows } from '../api/pagination'
 import { formatNumber } from '../utils/formatters'
@@ -298,6 +314,10 @@ const messages = {
     allowedSetups: 'Allowed setups', setupExamples: 'Opening breakout, pullback', noTradeConditions: 'No-trade conditions', noTradePlaceholder: 'When should you stay out?', createSession: 'Create session',
     noSessions: 'No sessions yet.', environmentNotSet: 'Environment not set', campaignsLower: 'decisions', limit: 'Limit', start: 'Start', close: 'Close', newDecision: 'New decision',
     activeDecisions: 'Active decisions', decisionsHelp: 'One decision can contain multiple execution attempts.', createCampaign: 'Create decision', campaignSnapshot: 'Pre-trade decision snapshot',
+    preTradeEditableHelp: 'Editable before the first fill. Every save creates a version; the latest version locks automatically on first execution.', editDecisionVersion: 'Edit pre-trade decision',
+    versionSaveHelp: 'Saving creates a new version and preserves the prior record.', changeNote: 'What changed?', changeNotePlaceholder: 'Why did the plan change?', saveNewVersion: 'Save new version',
+    editAndSaveVersion: 'Edit / save version', version: 'Version', versionHistory: 'Version history', initialVersion: 'Initial version', recordCorrection: 'Record correction', correction: 'Correction',
+    correctionTarget: 'Correction target', lockedDecision: 'Locked decision', fieldName: 'Field name', correctionReason: 'Reason for correction', originalValue: 'Original value', correctedValue: 'Corrected value', saveCorrection: 'Save correction',
     snapshotImmutableHelp: 'Once saved, the snapshot is immutable and can only be reviewed afterward.', session: 'Session', symbol: 'Symbol', direction: 'Direction', horizon: 'Horizon', setup: 'Setup',
     openingBreakout: 'Opening breakout', riskAmount: 'Risk amount', maxRiskR: 'Max risk (R)', maximumAttempts: 'Maximum attempts', observedEvidence: 'Observed evidence',
     evidencePlaceholder: 'VWAP reclaim, higher low…', interpretation: 'Interpretation', interpretationPlaceholder: 'What do the facts imply?', strongestCounterCase: 'Strongest counter-case',
@@ -331,6 +351,9 @@ const messages = {
     environment: '环境', volatileTrend: '高波动趋势', allowedSetups: '允许的策略', setupExamples: '开盘突破、回调入场', noTradeConditions: '禁止交易条件', noTradePlaceholder: '什么情况下必须观望？',
     createSession: '创建时段', noSessions: '还没有交易时段。', environmentNotSet: '未设置市场环境', campaignsLower: '个决策', limit: '上限', start: '开始', close: '结束', newDecision: '新建决策',
     activeDecisions: '当前决策', decisionsHelp: '一个交易决策可以包含多次执行尝试。', createCampaign: '创建决策', campaignSnapshot: '交易前决策快照', snapshotImmutableHelp: '保存后快照不可修改，只能在交易后复盘。',
+    preTradeEditableHelp: '首笔成交前可以编辑；每次保存都会产生新版本，首笔成交时自动锁定最新版本。', editDecisionVersion: '编辑交易前决策', versionSaveHelp: '保存会创建新版本，并保留此前的决策记录。',
+    changeNote: '本次修改内容', changeNotePlaceholder: '为什么调整交易计划？', saveNewVersion: '保存新版本', editAndSaveVersion: '编辑 / 保存版本', version: '版本', versionHistory: '版本历史', initialVersion: '初始版本',
+    recordCorrection: '记录修正', correction: '修正记录', correctionTarget: '修正对象', lockedDecision: '已锁定决策', fieldName: '字段名称', correctionReason: '修正原因', originalValue: '原始值', correctedValue: '修正值', saveCorrection: '保存修正记录',
     session: '交易时段', symbol: '标的', direction: '方向', horizon: '持仓周期', setup: '策略', openingBreakout: '开盘突破', riskAmount: '风险金额', maxRiskR: '最大风险（R）', maximumAttempts: '最多尝试次数',
     observedEvidence: '观察到的证据', evidencePlaceholder: '重新站上 VWAP、形成更高低点…', interpretation: '判断', interpretationPlaceholder: '这些事实意味着什么？', strongestCounterCase: '最强反方理由', counterCasePlaceholder: '这个判断为什么可能是错的？',
     chosenAction: '选择的行动', chosenActionPlaceholder: '入场、等待、减小仓位…', entryTrigger: '入场触发条件', entryTriggerPlaceholder: '明确、可观察的触发条件', invalidation: '失效条件', invalidationPlaceholder: '出现什么情况说明逻辑错误？',
@@ -351,6 +374,7 @@ const messages = {
 const enumMessages = {
   en: {
     draft: 'Draft', active: 'Active', planned: 'Planned', paused: 'Paused', closed: 'Closed', review_pending: 'Review pending', reviewed: 'Reviewed', cancelled: 'Cancelled', open: 'Open', scaling: 'Scaling', pending: 'Pending', voided: 'Voided',
+    pre_trade: 'Pre-trade · editable', review: 'Review only',
     premarket: 'Pre-market', opening: 'Opening', morning: 'Morning', midday: 'Midday', power_hour: 'Power hour', custom: 'Custom', long: 'Long', short: 'Short', neutral: 'Neutral', scalp: 'Scalp', intraday: 'Intraday', swing: 'Swing', position: 'Position',
     idea_validation: 'Idea validation', initial_entry: 'Initial entry', position_building: 'Position building', holding: 'Holding', risk_reduction: 'Risk reduction', exit: 'Exit', price_action: 'Price action', economic_data: 'Economic data', news: 'News', earnings: 'Earnings', risk_event: 'Risk event', time_review: 'Scheduled review',
     planned_retry: 'Planned retry', new_signal: 'New signal', better_price: 'Better price', noise_stop: 'Noise stop', changed_setup: 'Changed setup', emotional: 'Emotional', target: 'Target', trailing_stop: 'Trailing stop', initial_stop: 'Initial stop',
@@ -358,6 +382,7 @@ const enumMessages = {
   },
   zh: {
     draft: '草稿', active: '进行中', planned: '已计划', paused: '已暂停', closed: '已结束', review_pending: '待复盘', reviewed: '已复盘', cancelled: '已取消', open: '持有中', scaling: '调整仓位中', pending: '待处理', voided: '已作废',
+    pre_trade: '交易前 · 可编辑', review: '结束 · 仅复盘',
     premarket: '盘前', opening: '开盘', morning: '上午', midday: '午间', power_hour: '尾盘时段', custom: '自定义', long: '做多', short: '做空', neutral: '中性', scalp: '超短线', intraday: '日内', swing: '波段', position: '中长线',
     idea_validation: '想法验证', initial_entry: '首次建仓', position_building: '逐步建仓', holding: '持有观察', risk_reduction: '降低风险', exit: '退出', price_action: '价格行为', economic_data: '经济数据', news: '新闻', earnings: '财报', risk_event: '风险事件', time_review: '定期复查',
     planned_retry: '计划内重试', new_signal: '出现新信号', better_price: '更优价格', noise_stop: '噪声止损', changed_setup: '策略条件改变', emotional: '情绪驱动', target: '达到目标', trailing_stop: '移动止损', initial_stop: '初始止损',
@@ -418,11 +443,13 @@ const analytics = ref(null)
 const selectedSessionId = ref('')
 const showSessionForm = ref(false)
 const showCampaignForm = ref(false)
+const editingCampaignId = ref('')
 const selectedFillIds = ref([])
 const groupingCampaignId = ref('')
 const groupingAttemptId = ref('')
 const reviewCampaign = ref(null)
 const decisionUpdateCampaign = ref(null)
+const correctionCampaign = ref(null)
 const decisionStatusFilter = ref('')
 
 const dayForm = reactive({ daily_risk_limit: null, max_trades: null, market_environment: '' })
@@ -430,7 +457,7 @@ const sessionForm = reactive({ name: '', context_kind: 'intraday', context_type:
 const campaignForm = reactive({
   context: '', symbol: '', direction: 'long', horizon: 'intraday', setup: '', planned_risk_amount: 100,
   max_risk_r: 1, max_attempts: 2, observed_evidence_text: '', interpretation: '', strongest_counter_case: '',
-  chosen_action: '', entry_trigger: '', invalidation: '', time_stop: '', scenarios: [blankScenario(t('baseCase'), 60), blankScenario(t('failureCase'), 40)],
+  chosen_action: '', entry_trigger: '', invalidation: '', time_stop: '', change_note: '', scenarios: [blankScenario(t('baseCase'), 60), blankScenario(t('failureCase'), 40)],
 })
 const groupingForm = reactive({ reentry_reason: '', what_changed: '', was_planned: true })
 const reviewForm = reactive({
@@ -442,6 +469,7 @@ const decisionUpdateForm = reactive({
   position_stage: 'holding', event_type: 'price_action', event_at: localDateTime(), observed_evidence_text: '',
   interpretation: '', decision: '', risk_change: '', invalidation_update: '', next_review_at: '',
 })
+const correctionForm = reactive({ target_type: 'decision', field_name: '', original_value: '', corrected_value: '', reason: '' })
 
 function blankScenario(name = '', probability = 0) { return { name, probability, confirmation: '', contradiction: '', planned_action: '' } }
 const intradayContexts = computed(() => tradingDay.value?.contexts || [])
@@ -474,6 +502,7 @@ function shortTime(value) { return value ? new Date(value).toLocaleTimeString(la
 function shortDateTime(value) { return value ? new Date(value).toLocaleString(language.value === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-' }
 function numberClass(value) { return Number(value || 0) > 0 ? 'positive-value' : Number(value || 0) < 0 ? 'negative-value' : '' }
 function statusClass(value) { return ['active', 'open'].includes(value) ? 'running' : ['reviewed', 'closed'].includes(value) ? 'success' : ['cancelled', 'voided'].includes(value) ? 'failed' : 'partial' }
+function phaseClass(value) { return value === 'pre_trade' ? 'partial' : value === 'holding' ? 'running' : 'success' }
 function readError(err) {
   const data = err?.response?.data
   if (typeof data === 'string') return data
@@ -517,7 +546,32 @@ async function createSession() {
 }
 async function startSession(item) { await runAction(async () => { await startJournalContext(item.id); await loadToday() }) }
 async function closeSession(item) { await runAction(async () => { await closeJournalContext(item.id); await loadToday() }) }
-function openCampaignForm(contextId) { campaignForm.context = contextId; syncHorizonToContext(); showCampaignForm.value = true; window.scrollTo({ top: 350, behavior: 'smooth' }) }
+function openCampaignForm(contextId) {
+  editingCampaignId.value = ''
+  resetCampaignForm()
+  campaignForm.context = contextId
+  syncHorizonToContext()
+  showCampaignForm.value = true
+  window.scrollTo({ top: 350, behavior: 'smooth' })
+}
+function editCampaign(campaign) {
+  const decision = campaign.current_decision
+  if (!decision || !campaign.lifecycle?.can_edit_decision) return
+  editingCampaignId.value = campaign.id
+  Object.assign(campaignForm, {
+    context: campaign.context, symbol: campaign.symbol, direction: campaign.direction, horizon: campaign.horizon,
+    setup: campaign.setup, planned_risk_amount: Number(campaign.planned_risk_amount || 0), max_risk_r: Number(campaign.max_risk_r || 1),
+    max_attempts: campaign.max_attempts, observed_evidence_text: (decision.observed_evidence || []).join(', '),
+    interpretation: decision.interpretation, strongest_counter_case: decision.strongest_counter_case,
+    chosen_action: decision.chosen_action, entry_trigger: decision.entry_trigger, invalidation: decision.invalidation,
+    time_stop: decision.time_stop, change_note: '', scenarios: (decision.scenarios || []).map((item) => ({
+      name: item.name, probability: Number(item.probability), confirmation: item.confirmation,
+      contradiction: item.contradiction, planned_action: item.planned_action,
+    })),
+  })
+  showCampaignForm.value = true
+  window.scrollTo({ top: 350, behavior: 'smooth' })
+}
 function syncContextType() { sessionForm.context_type = sessionForm.context_kind === 'swing' ? 'idea_validation' : 'opening' }
 function syncHorizonToContext() { campaignForm.horizon = selectedCampaignContext.value?.context_kind === 'swing' ? 'swing' : 'intraday' }
 function addScenario() { if (campaignForm.scenarios.length < 3) campaignForm.scenarios.push(blankScenario(t('alternativeCase'), 0)) }
@@ -527,25 +581,34 @@ function resetCampaignForm() {
     context: selectedSessionId.value || contexts.value[0]?.id || '', symbol: '', direction: 'long', horizon: 'intraday', setup: '',
     planned_risk_amount: 100, max_risk_r: 1, max_attempts: 2, observed_evidence_text: '', interpretation: '',
     strongest_counter_case: '', chosen_action: '', entry_trigger: '', invalidation: '', time_stop: '',
+    change_note: '',
     scenarios: [blankScenario(t('baseCase'), 60), blankScenario(t('failureCase'), 40)],
   })
 }
 async function createCampaign(activate) {
   await runAction(async () => {
-    const res = await createJournalCampaign({
+    const campaignPayload = {
       context: campaignForm.context, symbol: campaignForm.symbol, direction: campaignForm.direction, setup: campaignForm.setup,
       horizon: campaignForm.horizon, max_risk_r: campaignForm.max_risk_r, planned_risk_amount: campaignForm.planned_risk_amount,
       max_attempts: campaignForm.max_attempts,
-    })
-    const campaign = res.data
-    await createDecisionSnapshot(campaign.id, {
+    }
+    let campaign
+    if (editingCampaignId.value) {
+      const res = await updateJournalCampaign(editingCampaignId.value, campaignPayload)
+      campaign = res.data
+    } else {
+      const res = await createJournalCampaign(campaignPayload)
+      campaign = res.data
+    }
+    await createDecisionVersion(campaign.id, {
       observed_evidence: campaignForm.observed_evidence_text.split(',').map((v) => v.trim()).filter(Boolean),
       interpretation: campaignForm.interpretation, strongest_counter_case: campaignForm.strongest_counter_case,
       chosen_action: campaignForm.chosen_action, entry_trigger: campaignForm.entry_trigger,
       invalidation: campaignForm.invalidation, time_stop: campaignForm.time_stop, scenarios: campaignForm.scenarios,
+      change_note: campaignForm.change_note,
     })
-    if (activate) await activateJournalCampaign(campaign.id)
-    showCampaignForm.value = false; resetCampaignForm(); await loadToday()
+    if (activate && campaign.status === 'planned') await activateJournalCampaign(campaign.id)
+    editingCampaignId.value = ''; showCampaignForm.value = false; resetCampaignForm(); await loadToday()
   })
 }
 async function activateCampaign(item) { await runAction(async () => { await activateJournalCampaign(item.id); await loadToday() }) }
@@ -580,7 +643,7 @@ function openDecisionUpdate(campaign) {
 async function submitDecisionUpdate() {
   await runAction(async () => {
     await createDecisionUpdate(decisionUpdateCampaign.value.id, {
-      position_stage: decisionUpdateForm.position_stage,
+      position_stage: decisionUpdateCampaign.value.context_kind === 'swing' ? decisionUpdateForm.position_stage : null,
       event_type: decisionUpdateForm.event_type,
       event_at: new Date(decisionUpdateForm.event_at).toISOString(),
       observed_evidence: decisionUpdateForm.observed_evidence_text.split(',').map((value) => value.trim()).filter(Boolean),
@@ -591,6 +654,28 @@ async function submitDecisionUpdate() {
       next_review_at: decisionUpdateForm.next_review_at ? new Date(decisionUpdateForm.next_review_at).toISOString() : null,
     })
     decisionUpdateCampaign.value = null
+    await loadToday()
+  })
+}
+function openCorrection(campaign) {
+  correctionCampaign.value = campaign
+  Object.assign(correctionForm, { target_type: 'decision', field_name: '', original_value: '', corrected_value: '', reason: '' })
+}
+function parseCorrectionValue(value) {
+  const trimmed = String(value ?? '').trim()
+  if (!trimmed) return ''
+  try { return JSON.parse(trimmed) } catch { return trimmed }
+}
+async function submitCorrection() {
+  await runAction(async () => {
+    await createCorrectionRecord(correctionCampaign.value.id, {
+      target_type: correctionForm.target_type,
+      field_name: correctionForm.field_name,
+      original_value: parseCorrectionValue(correctionForm.original_value),
+      corrected_value: parseCorrectionValue(correctionForm.corrected_value),
+      reason: correctionForm.reason,
+    })
+    correctionCampaign.value = null
     await loadToday()
   })
 }
@@ -659,6 +744,7 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .builder-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .campaign-card { display: grid; gap: 12px; }
 .campaign-card-top strong { font-size: 16px; }
+.campaign-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .campaign-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .campaign-stats span { display: grid; gap: 3px; padding: 9px 10px; background: #f7f9fd; border-radius: 10px; }
 .campaign-stats small { color: var(--tv-muted); font-size: 10px; text-transform: uppercase; font-weight: 750; }
@@ -677,6 +763,16 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .decision-update-row > span:first-child { color: var(--tv-muted); }
 .decision-update-form { display: grid; gap: 12px; padding: 13px; border: 1px solid #b8c8e8; border-radius: 11px; background: #f8faff; }
 .decision-update-form label { display: grid; gap: 5px; }
+.version-history { padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfe; }
+.version-history summary { cursor: pointer; color: #2454b8; font-size: 12px; font-weight: 750; }
+.version-row { display: grid; grid-template-columns: 42px 135px minmax(0, 1fr); gap: 8px; padding: 7px 0; border-bottom: 1px solid #edf1f7; font-size: 11px; }
+.version-row:last-child { border-bottom: 0; }
+.version-row span { color: var(--tv-muted); }
+.correction-button { color: #8a5b05; }
+.correction-list { display: grid; gap: 6px; }
+.correction-row { display: grid; grid-template-columns: 180px minmax(0, 1fr) 120px; gap: 10px; padding: 8px 10px; border-radius: 9px; background: #fff8e7; color: #7c4a03; font-size: 11px; }
+.correction-row small { color: #9a6b18; text-align: right; }
+.correction-form { border-color: #f3d39b; background: #fffaf0; }
 .grouping-workspace { display: grid; gap: 14px; }
 .csv-import-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 12px; border: 1px dashed #b8c8e8; border-radius: 11px; background: #f8faff; }
 .csv-import-row > div { display: grid; gap: 3px; }
@@ -717,5 +813,7 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
   .campaign-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grouping-controls { grid-template-columns: 1fr; }
   .snapshot-summary { grid-template-columns: 1fr; }
+  .decision-update-row, .version-row, .correction-row { grid-template-columns: 1fr; }
+  .correction-row small { text-align: left; }
 }
 </style>

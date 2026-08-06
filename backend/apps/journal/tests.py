@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from apps.common.models import BrokerAccount
 from apps.trades.models import RawIBKRExecution, TradeFill
 
-from .models import Campaign, DecisionContext, DecisionSnapshot, TradingDay
+from .models import Campaign, CorrectionRecord, DecisionContext, DecisionSnapshot, DecisionVersion, TradingDay
 
 
 class JournalMVPTests(TestCase):
@@ -57,19 +57,19 @@ class JournalMVPTests(TestCase):
             ],
         }
 
-    def create_snapshot(self):
+    def create_version(self, payload=None):
         return self.client.post(
-            f"/api/journal/campaigns/{self.campaign.id}/decision-snapshot/?account=DU-JOURNAL",
-            self.snapshot_payload(),
+            f"/api/journal/campaigns/{self.campaign.id}/decision-versions/?account=DU-JOURNAL",
+            payload or self.snapshot_payload(),
             format="json",
         )
 
-    def create_fill(self, execution_id, side, signed_qty, realized_pnl, second):
+    def create_fill(self, execution_id, side, signed_qty, realized_pnl, second, symbol="MESU6"):
         raw = RawIBKRExecution.objects.create(
             broker_account=self.account,
             account=self.account.account_code,
             execution_id=execution_id,
-            symbol="MESU6",
+            symbol=symbol,
             side=side,
             quantity="1",
             price="5000",
@@ -81,7 +81,7 @@ class JournalMVPTests(TestCase):
         )
         return TradeFill.objects.create(
             raw_execution=raw,
-            symbol="MESU6",
+            symbol=symbol,
             side=side,
             quantity="1",
             price="5000",
@@ -94,7 +94,7 @@ class JournalMVPTests(TestCase):
 
     def test_snapshot_requires_two_or_three_scenarios_totaling_about_100(self):
         response = self.client.post(
-            f"/api/journal/campaigns/{self.campaign.id}/decision-snapshot/?account=DU-JOURNAL",
+            f"/api/journal/campaigns/{self.campaign.id}/decision-versions/?account=DU-JOURNAL",
             self.snapshot_payload((80, 40)),
             format="json",
         )
@@ -102,9 +102,24 @@ class JournalMVPTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(DecisionSnapshot.objects.filter(campaign=self.campaign).exists())
 
-    def test_original_snapshot_cannot_be_overwritten(self):
-        response = self.create_snapshot()
-        self.assertEqual(response.status_code, 201)
+    def test_pretrade_versions_then_first_fill_locks_original_decision(self):
+        first = self.create_version()
+        changed_payload = self.snapshot_payload()
+        changed_payload["interpretation"] = "Buyers remain in control after a retest."
+        changed_payload["change_note"] = "Added retest evidence."
+        second = self.create_version(changed_payload)
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(DecisionVersion.objects.filter(campaign=self.campaign).count(), 2)
+        self.assertFalse(DecisionSnapshot.objects.filter(campaign=self.campaign).exists())
+
+        fill = self.create_fill("lock-entry", "BUY", "1", "0", 0)
+        grouped = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [fill.id], "planned_risk_r": 1},
+            format="json",
+        )
+        self.assertEqual(grouped.status_code, 200)
         snapshot = DecisionSnapshot.objects.get(campaign=self.campaign)
         original_hash = snapshot.immutable_snapshot_hash
         snapshot.interpretation = "Hindsight rewrite"
@@ -114,10 +129,25 @@ class JournalMVPTests(TestCase):
 
         snapshot.refresh_from_db()
         self.assertEqual(snapshot.immutable_snapshot_hash, original_hash)
-        self.assertEqual(snapshot.interpretation, "Buyers are accepting above VWAP.")
+        self.assertEqual(snapshot.interpretation, "Buyers remain in control after a retest.")
+        self.assertEqual(self.create_version().status_code, 400)
+        self.assertEqual(
+            self.client.patch(
+                f"/api/journal/campaigns/{self.campaign.id}/?account=DU-JOURNAL",
+                {"setup": "Hindsight setup"}, format="json",
+            ).status_code,
+            400,
+        )
+        correction = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/corrections/?account=DU-JOURNAL",
+            {"target_type": "decision", "field_name": "interpretation", "original_value": "typo", "corrected_value": "correct text", "reason": "Data-entry error"},
+            format="json",
+        )
+        self.assertEqual(correction.status_code, 201)
+        self.assertEqual(CorrectionRecord.objects.filter(campaign=self.campaign).count(), 1)
 
     def test_fill_grouping_close_and_review_workflow(self):
-        self.assertEqual(self.create_snapshot().status_code, 201)
+        self.assertEqual(self.create_version().status_code, 201)
         self.assertEqual(
             self.client.post(f"/api/journal/campaigns/{self.campaign.id}/activate/?account=DU-JOURNAL").status_code,
             200,
@@ -224,13 +254,21 @@ class JournalMVPTests(TestCase):
         )
         self.assertEqual(campaign.status_code, 201)
         snapshot = self.client.post(
-            f"/api/journal/campaigns/{campaign.data['id']}/decision-snapshot/?account=DU-JOURNAL",
+            f"/api/journal/campaigns/{campaign.data['id']}/decision-versions/?account=DU-JOURNAL",
             self.snapshot_payload(),
             format="json",
         )
         self.assertEqual(snapshot.status_code, 201)
         activated = self.client.post(f"/api/journal/campaigns/{campaign.data['id']}/activate/?account=DU-JOURNAL")
         self.assertEqual(activated.status_code, 200)
+        entry = self.create_fill("mcl-entry", "BUY", "1", "0", 2, symbol="MCL")
+        grouped = self.client.post(
+            f"/api/journal/campaigns/{campaign.data['id']}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [entry.id], "planned_risk_r": 1},
+            format="json",
+        )
+        self.assertEqual(grouped.status_code, 200)
+        self.assertTrue(grouped.data["lifecycle"]["decision_locked"])
 
         updated = self.client.post(
             f"/api/journal/campaigns/{campaign.data['id']}/decision-updates/?account=DU-JOURNAL",

@@ -24,10 +24,12 @@ from .models import (
     AuditEvent,
     Campaign,
     CampaignReview,
+    CorrectionRecord,
     DecisionContext,
     DecisionContextReview,
     DecisionSnapshot,
     DecisionUpdate,
+    DecisionVersion,
     Scenario,
     TradingDay,
 )
@@ -35,10 +37,12 @@ from .serializers import (
     AttemptSerializer,
     CampaignReviewSerializer,
     CampaignSerializer,
+    CorrectionRecordSerializer,
     DecisionContextReviewSerializer,
     DecisionContextSerializer,
     DecisionSnapshotSerializer,
     DecisionUpdateSerializer,
+    DecisionVersionSerializer,
     FillSummarySerializer,
     TradingDaySerializer,
 )
@@ -63,6 +67,62 @@ def _audit(account, aggregate, event_type, payload=None):
         event_type=event_type,
         payload=payload or {},
     )
+
+
+def _validated_scenarios(data):
+    scenarios = data.get("scenarios") or []
+    if len(scenarios) not in (2, 3):
+        raise ValidationError({"scenarios": "Exactly 2 or 3 scenarios are required."})
+    probabilities = [_decimal(item.get("probability")) for item in scenarios]
+    total = sum(probabilities, ZERO)
+    if not Decimal("99") <= total <= Decimal("101"):
+        raise ValidationError({"scenarios": "Scenario probabilities must total between 99 and 101."})
+    normalized = []
+    for index, item in enumerate(scenarios):
+        probability = probabilities[index]
+        if not Decimal("1") <= probability <= Decimal("99"):
+            raise ValidationError({"scenarios": "Each probability must be between 1 and 99."})
+        for field in ("name", "confirmation", "contradiction", "planned_action"):
+            if not str(item.get(field) or "").strip():
+                raise ValidationError({"scenarios": f"Scenario {index + 1} requires {field}."})
+        normalized.append({
+            "name": str(item["name"]).strip(), "probability": str(probability),
+            "confirmation": str(item["confirmation"]).strip(), "contradiction": str(item["contradiction"]).strip(),
+            "planned_action": str(item["planned_action"]).strip(), "sort_order": index,
+        })
+    return normalized
+
+
+def _lock_original_decision(campaign):
+    if hasattr(campaign, "decision_snapshot"):
+        return campaign.decision_snapshot
+    version = campaign.decision_versions.order_by("-version_no").first()
+    if not version:
+        raise ParseError("Save a pre-trade decision version before attaching the first fill.")
+    snapshot = DecisionSnapshot.objects.create(
+        campaign=campaign,
+        observed_evidence=version.observed_evidence,
+        interpretation=version.interpretation,
+        strongest_counter_case=version.strongest_counter_case,
+        chosen_action=version.chosen_action,
+        entry_trigger=version.entry_trigger,
+        invalidation=version.invalidation,
+        time_stop=version.time_stop,
+    )
+    for item in version.scenarios:
+        Scenario.objects.create(
+            snapshot=snapshot, name=item["name"], probability=_decimal(item["probability"]),
+            confirmation=item["confirmation"], contradiction=item["contradiction"],
+            planned_action=item["planned_action"], sort_order=item.get("sort_order", 0),
+        )
+    snapshot = DecisionSnapshot.objects.prefetch_related("scenarios").get(pk=snapshot.pk)
+    raw = json.dumps(snapshot.canonical_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    final_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    DecisionSnapshot.objects.filter(pk=snapshot.pk).update(immutable_snapshot_hash=final_hash)
+    _audit(_campaign_account(campaign), campaign, "OriginalDecisionLocked", {
+        "decision_version_id": str(version.id), "version_no": version.version_no, "hash": final_hash,
+    })
+    return snapshot
 
 
 def _recalculate_attempt(attempt):
@@ -124,7 +184,9 @@ class TradingDayViewSet(AccountScopedViewSet):
     serializer_class = TradingDaySerializer
     queryset = TradingDay.objects.select_related("account").prefetch_related(
         "contexts__campaigns__decision_snapshot__scenarios",
+        "contexts__campaigns__decision_versions",
         "contexts__campaigns__decision_updates",
+        "contexts__campaigns__corrections",
         "contexts__campaigns__attempts__fill_links__fill",
         "contexts__campaigns__review",
         "contexts__review",
@@ -168,7 +230,8 @@ class TradingDayViewSet(AccountScopedViewSet):
 class DecisionContextViewSet(AccountScopedViewSet):
     serializer_class = DecisionContextSerializer
     queryset = DecisionContext.objects.select_related("account", "trading_day").prefetch_related(
-        "campaigns__decision_snapshot__scenarios", "campaigns__attempts__fill_links__fill", "campaigns__review"
+        "campaigns__decision_snapshot__scenarios", "campaigns__decision_versions", "campaigns__decision_updates",
+        "campaigns__corrections", "campaigns__attempts__fill_links__fill", "campaigns__review"
     )
 
     def get_queryset(self):
@@ -227,7 +290,8 @@ class DecisionContextViewSet(AccountScopedViewSet):
 class CampaignViewSet(AccountScopedViewSet):
     serializer_class = CampaignSerializer
     queryset = Campaign.objects.select_related("account", "context__trading_day", "decision_snapshot").prefetch_related(
-        "decision_snapshot__scenarios", "decision_updates", "attempts__fill_links__fill", "review"
+        "decision_snapshot__scenarios", "decision_versions", "decision_updates", "corrections",
+        "attempts__fill_links__fill", "review"
     )
 
     def get_queryset(self):
@@ -252,51 +316,31 @@ class CampaignViewSet(AccountScopedViewSet):
         campaign = serializer.save(account=self.request_account(), symbol=serializer.validated_data["symbol"].strip().upper())
         _audit(self.request_account(), campaign, "CampaignCreated")
 
-    @action(detail=True, methods=["post"], url_path="decision-snapshot")
-    def decision_snapshot(self, request, pk=None):
+    def update(self, request, *args, **kwargs):
         campaign = self.get_object()
-        if hasattr(campaign, "decision_snapshot"):
-            raise ParseError("The original decision snapshot is immutable and already exists.")
-        scenarios = request.data.get("scenarios") or []
-        if len(scenarios) not in (2, 3):
-            raise ValidationError({"scenarios": "Exactly 2 or 3 scenarios are required."})
-        probabilities = [_decimal(item.get("probability")) for item in scenarios]
-        total = sum(probabilities, ZERO)
-        if not Decimal("99") <= total <= Decimal("101"):
-            raise ValidationError({"scenarios": "Scenario probabilities must total between 99 and 101."})
-        for index, item in enumerate(scenarios):
-            probability = probabilities[index]
-            if not Decimal("1") <= probability <= Decimal("99"):
-                raise ValidationError({"scenarios": "Each probability must be between 1 and 99."})
-            for field in ("name", "confirmation", "contradiction", "planned_action"):
-                if not str(item.get(field) or "").strip():
-                    raise ValidationError({"scenarios": f"Scenario {index + 1} requires {field}."})
-        serializer = DecisionSnapshotSerializer(data=request.data)
+        if hasattr(campaign, "decision_snapshot") or campaign.status in ("closed", "review_pending", "reviewed", "cancelled"):
+            raise ParseError("Campaign fields are locked after the first fill. Use a correction record for data-entry errors.")
+        return super().update(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"], url_path="decision-versions")
+    def decision_versions(self, request, pk=None):
+        campaign = self.get_object()
+        if hasattr(campaign, "decision_snapshot") or campaign.status in ("closed", "review_pending", "reviewed", "cancelled"):
+            raise ParseError("The original decision is locked. Append a decision update or correction instead.")
+        scenarios = _validated_scenarios(request.data)
+        serializer = DecisionVersionSerializer(data={**request.data, "scenarios": scenarios})
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
-            snapshot = serializer.save(campaign=campaign)
-            for index, item in enumerate(scenarios):
-                Scenario.objects.create(
-                    snapshot=snapshot,
-                    name=item["name"],
-                    probability=probabilities[index],
-                    confirmation=item["confirmation"],
-                    contradiction=item["contradiction"],
-                    planned_action=item["planned_action"],
-                    sort_order=index,
-                )
-            snapshot = DecisionSnapshot.objects.prefetch_related("scenarios").get(pk=snapshot.pk)
-            raw = json.dumps(snapshot.canonical_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            final_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-            DecisionSnapshot.objects.filter(pk=snapshot.pk).update(immutable_snapshot_hash=final_hash)
-            _audit(_campaign_account(campaign), campaign, "DecisionSnapshotCreated", {"hash": final_hash})
+            version_no = (campaign.decision_versions.order_by("-version_no").values_list("version_no", flat=True).first() or 0) + 1
+            version = serializer.save(campaign=campaign, version_no=version_no)
+            _audit(_campaign_account(campaign), campaign, "DecisionVersionSaved", {
+                "decision_version_id": str(version.id), "version_no": version.version_no,
+            })
         return Response(CampaignSerializer(self.get_object()).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
         campaign = self.get_object()
-        if not hasattr(campaign, "decision_snapshot"):
-            raise ParseError("Create a decision snapshot before activation.")
         readiness = CampaignSerializer(campaign).data["readiness"]
         if not readiness["ready"]:
             raise ValidationError({"readiness": readiness})
@@ -308,18 +352,18 @@ class CampaignViewSet(AccountScopedViewSet):
     @action(detail=True, methods=["post"], url_path="decision-updates")
     def decision_updates(self, request, pk=None):
         campaign = self.get_object()
-        if campaign.horizon not in ("swing", "position"):
-            raise ParseError("Decision updates are intended for swing or position campaigns.")
         if campaign.status not in ("active", "paused"):
             raise ParseError("Activate the campaign before recording a decision update.")
+        if not hasattr(campaign, "decision_snapshot"):
+            raise ParseError("The original decision locks on the first fill; updates are available after that point.")
         serializer = DecisionUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             update = serializer.save(campaign=campaign)
             context = campaign.context
-            if context.context_kind != "swing":
-                raise ValidationError("Swing decision updates require a swing context.")
-            if context.context_type != update.position_stage:
+            if context.context_kind == "swing" and not update.position_stage:
+                raise ValidationError({"position_stage": "Swing decision updates require a position stage."})
+            if context.context_kind == "swing" and context.context_type != update.position_stage:
                 context.context_type = update.position_stage
                 context.save(update_fields=["context_type", "updated_at"])
             _audit(_campaign_account(campaign), campaign, "DecisionUpdated", {
@@ -327,6 +371,19 @@ class CampaignViewSet(AccountScopedViewSet):
                 "position_stage": update.position_stage,
                 "event_type": update.event_type,
             })
+        return Response(self.get_serializer(self.get_object()).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def corrections(self, request, pk=None):
+        campaign = self.get_object()
+        if not hasattr(campaign, "decision_snapshot"):
+            raise ParseError("Before the first fill, correct the decision by saving a new version.")
+        serializer = CorrectionRecordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        correction = serializer.save(campaign=campaign)
+        _audit(_campaign_account(campaign), campaign, "CorrectionRecorded", {
+            "correction_id": str(correction.id), "target_type": correction.target_type, "field_name": correction.field_name,
+        })
         return Response(self.get_serializer(self.get_object()).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="attach-fills")
@@ -345,6 +402,7 @@ class CampaignViewSet(AccountScopedViewSet):
             raise ValidationError({"fill_ids": "All fills must match the campaign symbol."})
         attempt_id = request.data.get("attempt_id")
         with transaction.atomic():
+            _lock_original_decision(campaign)
             if attempt_id:
                 attempt = campaign.attempts.filter(pk=attempt_id).first()
                 if not attempt:

@@ -7,10 +7,12 @@ from .models import (
     AttemptFill,
     Campaign,
     CampaignReview,
+    CorrectionRecord,
     DecisionContext,
     DecisionContextReview,
     DecisionSnapshot,
     DecisionUpdate,
+    DecisionVersion,
     Scenario,
     TradingDay,
 )
@@ -34,6 +36,16 @@ class DecisionSnapshotSerializer(serializers.ModelSerializer):
             "created_at", "scenarios",
         ]
         read_only_fields = ["id", "immutable_snapshot_hash", "revision_no", "created_at", "scenarios"]
+
+
+class DecisionVersionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DecisionVersion
+        fields = [
+            "id", "campaign", "version_no", "observed_evidence", "interpretation", "strongest_counter_case",
+            "chosen_action", "entry_trigger", "invalidation", "time_stop", "scenarios", "change_note", "created_at",
+        ]
+        read_only_fields = ["id", "campaign", "version_no", "created_at"]
 
 
 class FillSummarySerializer(serializers.Serializer):
@@ -82,37 +94,77 @@ class DecisionUpdateSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "campaign", "created_at", "updated_at"]
 
 
+class CorrectionRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CorrectionRecord
+        fields = [
+            "id", "campaign", "target_type", "field_name", "original_value", "corrected_value", "reason", "created_at",
+        ]
+        read_only_fields = ["id", "campaign", "created_at"]
+
+
 class CampaignSerializer(serializers.ModelSerializer):
     decision_snapshot = DecisionSnapshotSerializer(read_only=True)
+    decision_versions = DecisionVersionSerializer(many=True, read_only=True)
+    current_decision = serializers.SerializerMethodField()
     attempts = AttemptSerializer(many=True, read_only=True)
     review = CampaignReviewSerializer(read_only=True)
     decision_updates = DecisionUpdateSerializer(many=True, read_only=True)
+    corrections = CorrectionRecordSerializer(many=True, read_only=True)
     context_name = serializers.CharField(source="context.name", read_only=True)
     context_kind = serializers.CharField(source="context.context_kind", read_only=True)
     context_type = serializers.CharField(source="context.context_type", read_only=True)
     trade_date = serializers.DateField(source="context.trading_day.trade_date", read_only=True, allow_null=True)
     readiness = serializers.SerializerMethodField()
+    lifecycle = serializers.SerializerMethodField()
 
     class Meta:
         model = Campaign
         fields = [
             "id", "context", "context_name", "context_kind", "context_type", "trade_date", "symbol", "direction", "setup", "horizon",
             "status", "max_risk_r", "planned_risk_amount", "max_attempts", "result_r", "realized_pnl",
-            "closed_at", "cancel_reason", "decision_snapshot", "decision_updates", "attempts", "review", "readiness",
+            "closed_at", "cancel_reason", "decision_snapshot", "decision_versions", "current_decision", "decision_updates",
+            "corrections", "attempts", "review", "readiness", "lifecycle",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "status", "result_r", "realized_pnl", "closed_at", "decision_snapshot", "decision_updates", "attempts", "review", "created_at", "updated_at"]
+        read_only_fields = ["id", "status", "result_r", "realized_pnl", "closed_at", "decision_snapshot", "decision_versions", "current_decision", "decision_updates", "corrections", "attempts", "review", "lifecycle", "created_at", "updated_at"]
+
+    def get_current_decision(self, obj):
+        if hasattr(obj, "decision_snapshot"):
+            return DecisionSnapshotSerializer(obj.decision_snapshot).data
+        version = obj.decision_versions.order_by("-version_no").first()
+        return DecisionVersionSerializer(version).data if version else None
+
+    def get_lifecycle(self, obj):
+        locked = hasattr(obj, "decision_snapshot")
+        ended = obj.status in ("closed", "review_pending", "reviewed", "cancelled")
+        if ended:
+            phase = "review"
+        elif locked:
+            phase = "holding"
+        else:
+            phase = "pre_trade"
+        return {
+            "phase": phase,
+            "decision_locked": locked,
+            "can_edit_decision": not locked and not ended,
+            "can_add_update": locked and not ended,
+            "can_review": ended,
+            "version_count": obj.decision_versions.count(),
+        }
 
     def get_readiness(self, obj):
         snapshot = getattr(obj, "decision_snapshot", None)
-        if not snapshot:
+        version = obj.decision_versions.order_by("-version_no").first() if not snapshot else None
+        decision = snapshot or version
+        if not decision:
             return {"score": 25, "ready": False, "missing": ["decision_snapshot"]}
         missing = []
         for field in ("interpretation", "strongest_counter_case", "entry_trigger", "invalidation"):
-            if not getattr(snapshot, field):
+            if not getattr(decision, field):
                 missing.append(field)
-        scenarios = list(snapshot.scenarios.all())
-        total = sum((item.probability for item in scenarios), Decimal("0"))
+        scenarios = list(snapshot.scenarios.all()) if snapshot else version.scenarios
+        total = sum((item.probability for item in scenarios), Decimal("0")) if snapshot else sum((Decimal(str(item.get("probability") or 0)) for item in scenarios), Decimal("0"))
         if len(scenarios) not in (2, 3):
             missing.append("2_to_3_scenarios")
         if not Decimal("99") <= total <= Decimal("101"):
