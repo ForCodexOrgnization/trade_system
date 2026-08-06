@@ -221,71 +221,6 @@
             </div>
           </div>
 
-          <div v-if="showWidget('processAnalytics')" class="card tv-tabbed-panel tv-tabbed-panel-compact">
-            <div class="tv-panel-head">
-              <div class="tv-chart-title">Process Analytics</div>
-              <div class="tv-panel-meta">How you win / lose</div>
-            </div>
-            <div class="tv-dashboard-chart-grid tv-dashboard-chart-grid-triple">
-              <TradesVizChart
-                title="PnL by Setup"
-                subtitle="Process edge by setup"
-                :categories="setupCategories"
-                :series="setupPnlSeries"
-                default-type="bar"
-                :height="182"
-              />
-              <TradesVizChart
-                title="Win Rate by Setup"
-                subtitle="Setup quality consistency"
-                :categories="setupCategories"
-                :series="setupWinRateSeries"
-                default-type="bar"
-                :height="182"
-              />
-              <TradesVizChart
-                title="Avg R by Setup"
-                subtitle="Risk-adjusted performance"
-                :categories="setupCategories"
-                :series="setupAvgRSeries"
-                default-type="bar"
-                :height="182"
-              />
-              <TradesVizChart
-                title="PnL by Session"
-                subtitle="Which session hurts or helps"
-                :categories="sessionCategories"
-                :series="sessionPnlSeries"
-                default-type="bar"
-                :height="182"
-              />
-              <TradesVizChart
-                title="Overnight vs Intraday PnL"
-                subtitle="Holding style contribution"
-                :categories="overnightCategories"
-                :series="overnightSeries"
-                default-type="bar"
-                :height="182"
-              />
-              <TradesVizChart
-                title="First Trade vs Later Trades"
-                subtitle="Intraday sequencing effect"
-                :categories="firstLaterCategories"
-                :series="firstLaterSeries"
-                default-type="bar"
-                :height="182"
-              />
-            </div>
-            <div class="tv-mini-analytics-grid" style="margin-top: 12px;">
-              <StatCard label="Rule Violations" :value="stats.charts?.rule_violations_count || 0" compact />
-              <StatCard label="Early Exit Rate" :value="formatPercent(stats.charts?.early_exit_rate || 0)" compact />
-              <StatCard label="Over-hold Rate" :value="formatPercent(stats.charts?.over_hold_rate || 0)" compact />
-              <StatCard label="Top Mistake Tag" :value="topMistakeTag" compact />
-              <StatCard label="2nd Mistake Tag" :value="secondMistakeTag" compact />
-              <StatCard label="Repeated Symbol PnL" :value="repeatedSymbolPnl" compact />
-            </div>
-          </div>
-
           <div v-if="showWidget('detailTabs')" class="card tv-tabbed-panel tv-tabbed-panel-compact">
             <div class="tv-panel-head">
               <div class="tv-panel-tabs">
@@ -378,7 +313,6 @@ const defaultWidgets = [
   'cumulativePnl',
   'symbolPnl',
   'miniAnalytics',
-  'processAnalytics',
   'detailTabs',
 ]
 const defaultPanelOrder = ['dailyPnl', 'winsLosses', 'cumulativePnl', 'symbolPnl', 'miniAnalytics']
@@ -390,7 +324,6 @@ const widgetOptions = [
   { id: 'cumulativePnl', label: 'Cumulative PnL' },
   { id: 'symbolPnl', label: 'PnL by Symbol' },
   { id: 'miniAnalytics', label: 'Closed Trade Analytics' },
-  { id: 'processAnalytics', label: 'Process Analytics' },
   { id: 'detailTabs', label: 'Detail Tabs' },
 ]
 
@@ -467,17 +400,6 @@ function emptyStats() {
       status_breakdown: {},
       symbol_pnl: [],
       daily_wins_losses: [],
-      pnl_by_setup: [],
-      win_rate_by_setup: [],
-      avg_r_by_setup: [],
-      pnl_by_session: [],
-      overnight_vs_intraday_pnl: [],
-      first_vs_later_pnl: [],
-      same_symbol_repeated_performance: [],
-      mistake_tag_ranking: [],
-      rule_violations_count: 0,
-      early_exit_rate: 0,
-      over_hold_rate: 0,
     },
   }
 }
@@ -568,17 +490,6 @@ function normalizeDashboardStats(raw = null) {
     daily_wins_losses: normalizeWinsLossesChart(charts.daily_wins_losses),
     symbol_pnl: normalizeSymbolPnlChart(charts.symbol_pnl, charts.pnl_by_symbol),
     status_breakdown: charts.status_breakdown && typeof charts.status_breakdown === 'object' ? charts.status_breakdown : {},
-    pnl_by_setup: normalizeDateValueChart(charts.pnl_by_setup, 'date', 'realized_pnl'),
-    win_rate_by_setup: normalizeDateValueChart(charts.win_rate_by_setup, 'date', 'realized_pnl'),
-    avg_r_by_setup: normalizeDateValueChart(charts.avg_r_by_setup, 'date', 'realized_pnl'),
-    pnl_by_session: normalizeDateValueChart(charts.pnl_by_session, 'date', 'realized_pnl'),
-    overnight_vs_intraday_pnl: normalizeDateValueChart(charts.overnight_vs_intraday_pnl, 'date', 'realized_pnl'),
-    first_vs_later_pnl: normalizeDateValueChart(charts.first_vs_later_pnl, 'date', 'realized_pnl'),
-    same_symbol_repeated_performance: normalizeDateValueChart(charts.same_symbol_repeated_performance, 'date', 'realized_pnl'),
-    mistake_tag_ranking: Array.isArray(charts.mistake_tag_ranking) ? charts.mistake_tag_ranking : [],
-    rule_violations_count: Number(charts.rule_violations_count ?? 0),
-    early_exit_rate: Number(charts.early_exit_rate ?? 0),
-    over_hold_rate: Number(charts.over_hold_rate ?? 0),
   }
 
   return normalized
@@ -735,28 +646,6 @@ const winsLossSeries = computed(() => [
 ])
 const symbolCategories = computed(() => (stats.value.charts?.symbol_pnl || []).map((item) => item.symbol))
 const symbolSeries = computed(() => [{ name: 'Realized PnL', color: '#f59e0b', data: (stats.value.charts?.symbol_pnl || []).map((item) => Number(item.realized_pnl)) }])
-const setupCategories = computed(() => (stats.value.charts?.pnl_by_setup || []).map((item) => item.date))
-const setupPnlSeries = computed(() => [{ name: 'PnL', color: '#14b8a6', data: (stats.value.charts?.pnl_by_setup || []).map((item) => Number(item.realized_pnl)) }])
-const setupWinRateSeries = computed(() => [{ name: 'Win Rate %', color: '#22c55e', data: (stats.value.charts?.win_rate_by_setup || []).map((item) => Number(item.realized_pnl)) }])
-const setupAvgRSeries = computed(() => [{ name: 'Avg R', color: '#6366f1', data: (stats.value.charts?.avg_r_by_setup || []).map((item) => Number(item.realized_pnl)) }])
-const sessionCategories = computed(() => (stats.value.charts?.pnl_by_session || []).map((item) => item.date))
-const sessionPnlSeries = computed(() => [{ name: 'PnL', color: '#f97316', data: (stats.value.charts?.pnl_by_session || []).map((item) => Number(item.realized_pnl)) }])
-const overnightCategories = computed(() => (stats.value.charts?.overnight_vs_intraday_pnl || []).map((item) => item.date))
-const overnightSeries = computed(() => [{ name: 'PnL', color: '#0ea5e9', data: (stats.value.charts?.overnight_vs_intraday_pnl || []).map((item) => Number(item.realized_pnl)) }])
-const firstLaterCategories = computed(() => (stats.value.charts?.first_vs_later_pnl || []).map((item) => item.date))
-const firstLaterSeries = computed(() => [{ name: 'PnL', color: '#eab308', data: (stats.value.charts?.first_vs_later_pnl || []).map((item) => Number(item.realized_pnl)) }])
-const topMistakeTag = computed(() => {
-  const first = stats.value.charts?.mistake_tag_ranking?.[0]
-  return first ? `${first.label} (${first.count})` : '-'
-})
-const secondMistakeTag = computed(() => {
-  const second = stats.value.charts?.mistake_tag_ranking?.[1]
-  return second ? `${second.label} (${second.count})` : '-'
-})
-const repeatedSymbolPnl = computed(() => {
-  const item = (stats.value.charts?.same_symbol_repeated_performance || []).find((entry) => entry.date === 'repeated_symbol')
-  return item ? Number(item.realized_pnl) : 0
-})
 const orderedPanels = computed(() => {
   const panelIds = normalizePanelOrder(activeTab.value?.panel_order)
   return panelIds.map((id) => ({ id })).filter((panel) => showWidget(panel.id))

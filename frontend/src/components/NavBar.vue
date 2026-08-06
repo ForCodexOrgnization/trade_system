@@ -1,7 +1,7 @@
 
 <template>
   <nav class="tv-nav journal-nav" aria-label="Primary navigation">
-    <router-link class="journal-brand" to="/journal" aria-label="Trade Journal home" @click="closeRecordsMenu">
+    <router-link class="journal-brand" to="/" aria-label="Trade Journal home" @click="closeRecordsMenu">
       <span class="journal-brand-mark">TJ</span>
       <span class="journal-brand-copy">
         <strong>Trade Journal</strong>
@@ -10,11 +10,7 @@
     </router-link>
 
     <div class="journal-primary-links">
-      <router-link class="journal-nav-link journal-nav-link-primary" to="/journal" @click="closeRecordsMenu">
-        <span>Journal</span>
-        <small>Plan &amp; review</small>
-      </router-link>
-      <router-link class="journal-nav-link" to="/" @click="closeRecordsMenu">
+      <router-link class="journal-nav-link journal-nav-link-primary" to="/" @click="closeRecordsMenu">
         <span>Dashboard</span>
         <small>Performance overview</small>
       </router-link>

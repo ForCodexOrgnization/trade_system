@@ -48,36 +48,10 @@ class IBKRSyncService:
         groups = TradeGroup.all_objects.all().order_by('id')
         if target_account is not None:
             groups = groups.filter(account=target_account)
-        protected_groups = []
-        for group in groups:
-            has_user_content = any(
-                [
-                    hasattr(group, 'journal'),
-                    hasattr(group, 'trade_review'),
-                    hasattr(group, 'pretrade_snapshot'),
-                    group.daily_reviews.exists(),
-                    group.daily_review_links.exists(),
-                    group.position_checkpoints.exists(),
-                ]
-            )
-            if not has_user_content:
-                continue
-            protected_groups.append(
-                {
-                    'id': group.id,
-                    'symbol': group.symbol,
-                    'asset_class': group.asset_class,
-                    'direction': group.direction,
-                    'opened_at': group.opened_at.isoformat() if group.opened_at else None,
-                    'closed_at': group.closed_at.isoformat() if group.closed_at else None,
-                    'status': group.status,
-                }
-            )
-
         return {
             'total_trade_groups': groups.count(),
-            'protected_trade_groups': len(protected_groups),
-            'protected_examples': protected_groups[:50],
+            'protected_trade_groups': 0,
+            'protected_examples': [],
         }
 
     def run_full_sync(self, sync_job: SyncJob, target_account: BrokerAccount | None = None):

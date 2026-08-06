@@ -5,17 +5,6 @@ from django.db import connection
 from django.db.utils import ProgrammingError
 from django.db.models import Q
 from .models import RawIBKRExecution, TradeFill, TradeGroup, TradeLotSnapshot, TradeMatchedLot
-from apps.journal.models import DailyReview
-
-
-def _daily_review_has_strategy_column():
-    table_name = DailyReview._meta.db_table
-    with connection.cursor() as cursor:
-        columns = {
-            item.name
-            for item in connection.introspection.get_table_description(cursor, table_name)
-        }
-    return 'strategy' in columns
 
 
 def _trade_matched_lot_table_exists():
@@ -40,19 +29,6 @@ def _bound_group_queryset_to_trade_window(qs, obj, *, is_spread):
     elif is_spread and obj.opened_at:
         qs = qs.filter(executed_at__lte=obj.opened_at + timedelta(seconds=2))
     return qs
-
-
-def _trade_review_column_exists(column_name):
-    from apps.journal.models import TradeReview
-    table_name = TradeReview._meta.db_table
-    with connection.cursor() as cursor:
-        if table_name not in connection.introspection.table_names(cursor):
-            return False
-        columns = {
-            item.name
-            for item in connection.introspection.get_table_description(cursor, table_name)
-        }
-    return column_name in columns
 
 
 class RawIBKRExecutionSerializer(serializers.ModelSerializer):
@@ -85,8 +61,6 @@ class TradeGroupSerializer(serializers.ModelSerializer):
     matched_lots = TradeMatchedLotSerializer(many=True, read_only=True)
     raw_executions = serializers.SerializerMethodField()
     fills = serializers.SerializerMethodField()
-    linked_daily_reviews = serializers.SerializerMethodField()
-    trade_review = serializers.SerializerMethodField()
 
     class Meta:
         model = TradeGroup
@@ -160,54 +134,3 @@ class TradeGroupSerializer(serializers.ModelSerializer):
     def get_fills(self, obj):
         qs = self._group_fills_queryset(obj)
         return TradeFillSerializer(qs, many=True).data
-
-    def get_linked_daily_reviews(self, obj):
-        direct_ids = obj.daily_reviews.values_list('id', flat=True)
-        linked_ids = obj.daily_review_links.values_list('id', flat=True)
-        review_qs = DailyReview.objects.filter(id__in=set(direct_ids) | set(linked_ids)).order_by('-review_date', '-id')
-        if not _daily_review_has_strategy_column():
-            review_qs = review_qs.defer('strategy', 'thesis', 'entry_logic', 'exit_logic')
-        return [
-            {
-                'id': review.id,
-                'review_date': review.review_date,
-                'market_summary': review.market_summary,
-            }
-            for review in review_qs
-        ]
-
-    def get_trade_review(self, obj):
-        if not _trade_review_column_exists('would_take_again'):
-            return None
-        review = getattr(obj, 'trade_review', None)
-        if not review:
-            return None
-        try:
-            return {
-                'id': review.id,
-                'strategy': review.strategy,
-                'session': review.session,
-                'thesis': review.thesis,
-                'entry_trigger': review.entry_trigger,
-                'invalidation': review.invalidation,
-                'planned_target': review.planned_target,
-                'sizing_rationale': review.sizing_rationale,
-                'entry_quality': review.entry_quality,
-                'exit_quality': review.exit_quality,
-                'risk_management': review.risk_management,
-                'followed_plan': review.followed_plan,
-                'would_take_again': review.would_take_again,
-                'emotion_before': review.emotion_before,
-                'emotion_during': review.emotion_during,
-                'emotion_after': review.emotion_after,
-                'what_i_did_well': review.what_i_did_well,
-                'what_to_improve': review.what_to_improve,
-                'realized_r': review.realized_r,
-                'final_grade': review.final_grade,
-                'setup': review.setup_id,
-                'mistake_tags': list(review.mistake_tags.values_list('id', flat=True)),
-                'daily_review': review.daily_review_id,
-                'screenshots': review.screenshots,
-            }
-        except ProgrammingError:
-            return None

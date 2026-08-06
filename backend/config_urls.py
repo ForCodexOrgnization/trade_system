@@ -8,5 +8,4 @@ urlpatterns = [
     path('api/trades/', include('apps.trades.urls')),
     path('api/common/', include('apps.common.urls')),
     path('api/syncs/', include('apps.syncs.urls')),
-    path('api/journal/', include('apps.journal.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

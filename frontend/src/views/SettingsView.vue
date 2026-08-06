@@ -65,63 +65,6 @@
 
       <AccountSyncPanel />
 
-      <div class="card settings-card compact-config-card">
-        <div class="section-title">Journal Strategies</div>
-        <div class="settings-copy muted-copy">用于 Journal 的 Strategy 下拉配置。可调整排序、启用/停用、增删。</div>
-        <div class="settings-form-grid strategy-settings-grid">
-          <label>
-            <span>New Strategy</span>
-            <input v-model.trim="newStrategyName" type="text" placeholder="例如：Opening Breakout" @keyup.enter="addStrategy" />
-          </label>
-          <div class="settings-actions">
-            <button @click="addStrategy" :disabled="!newStrategyName || strategySaving">{{ strategySaving ? 'Saving...' : 'Add Strategy' }}</button>
-          </div>
-        </div>
-
-        <div class="strategy-list compact-config-list">
-          <div v-for="item in strategyOptions" :key="item.id" class="compact-config-row strategy-compact-row">
-            <input v-model.trim="item.name" class="compact-name-input" type="text" placeholder="Strategy name" />
-            <label class="compact-order-field">
-              <span>Order</span>
-              <input v-model.number="item.sort_order" type="number" min="0" />
-            </label>
-            <label class="compact-active-toggle">
-              <input v-model="item.is_active" type="checkbox" />
-              <span>Active</span>
-            </label>
-            <div class="compact-row-actions">
-              <button class="secondary small-btn" @click="saveStrategy(item)">Save</button>
-              <button class="secondary small-btn" @click="removeStrategy(item.id)">Delete</button>
-            </div>
-          </div>
-          <div v-if="!strategyOptions.length" class="muted-copy">No strategies configured yet.</div>
-        </div>
-      </div>
-
-      <div class="card settings-card compact-config-card">
-        <div class="section-title">Mistake Tags</div>
-        <div class="settings-copy muted-copy">配置 Trade Review / Daily Review 中的 Mistake Tags，支持新增、编辑、删除。</div>
-        <div class="settings-form-grid strategy-settings-grid">
-          <label>
-            <span>New Mistake Tag</span>
-            <input v-model.trim="newMistakeTagName" type="text" placeholder="例如：Ignored Stop" @keyup.enter="addMistakeTag" />
-          </label>
-          <div class="settings-actions">
-            <button @click="addMistakeTag" :disabled="!newMistakeTagName || mistakeTagSaving">{{ mistakeTagSaving ? 'Saving...' : 'Add Tag' }}</button>
-          </div>
-        </div>
-        <div class="strategy-list compact-config-list">
-          <div v-for="item in mistakeTagOptions" :key="item.id" class="compact-config-row mistake-compact-row">
-            <input v-model.trim="item.name" class="compact-name-input" type="text" placeholder="Mistake tag name" />
-            <div class="compact-row-actions">
-              <button class="secondary small-btn" @click="saveMistakeTag(item)">Save</button>
-              <button class="secondary small-btn" @click="removeMistakeTag(item.id)">Delete</button>
-            </div>
-          </div>
-          <div v-if="!mistakeTagOptions.length" class="muted-copy">No mistake tags configured yet.</div>
-        </div>
-      </div>
-
     </div>
 
     <div class="settings-reset-row">
@@ -134,26 +77,15 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import {
-  fetchStrategyOptions,
-  createStrategyOption,
-  updateStrategyOption,
-  deleteStrategyOption,
   fetchBrokerAccounts,
   createBrokerAccount,
   updateBrokerAccount,
   testBrokerAccountConnection,
 } from '../api/common'
-import { createMistakeTag, deleteMistakeTag, fetchMistakeTags, updateMistakeTag } from '../api/journal'
 import { responseRows } from '../api/pagination'
 import { refreshAccounts } from '../state/accounts'
 import AccountSyncPanel from '../components/AccountSyncPanel.vue'
 
-const strategyOptions = ref([])
-const strategySaving = ref(false)
-const newStrategyName = ref('')
-const mistakeTagOptions = ref([])
-const mistakeTagSaving = ref(false)
-const newMistakeTagName = ref('')
 const brokerAccounts = ref([])
 const editingAccountId = ref(null)
 const accountSaving = ref(false)
@@ -220,69 +152,6 @@ async function toggleTradingAccount(account) {
   await Promise.all([loadBrokerAccounts(), refreshAccounts()])
 }
 
-async function loadStrategyOptions() {
-  const res = await fetchStrategyOptions()
-  strategyOptions.value = (res.data?.results || res.data || []).sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name))
-}
-
-async function addStrategy() {
-  if (!newStrategyName.value) return
-  strategySaving.value = true
-  try {
-    await createStrategyOption({
-      name: newStrategyName.value,
-      is_active: true,
-      sort_order: strategyOptions.value.length,
-    })
-    newStrategyName.value = ''
-    await loadStrategyOptions()
-  } finally {
-    strategySaving.value = false
-  }
-}
-
-async function saveStrategy(item) {
-  await updateStrategyOption(item.id, {
-    name: item.name,
-    is_active: item.is_active,
-    sort_order: item.sort_order,
-  })
-  await loadStrategyOptions()
-}
-
-async function removeStrategy(id) {
-  if (!window.confirm('Delete this strategy option?')) return
-  await deleteStrategyOption(id)
-  await loadStrategyOptions()
-}
-
-async function loadMistakeTags() {
-  const res = await fetchMistakeTags()
-  mistakeTagOptions.value = (res.data?.results || res.data || []).sort((a, b) => a.name.localeCompare(b.name))
-}
-
-async function addMistakeTag() {
-  if (!newMistakeTagName.value) return
-  mistakeTagSaving.value = true
-  try {
-    await createMistakeTag({ name: newMistakeTagName.value })
-    newMistakeTagName.value = ''
-    await loadMistakeTags()
-  } finally {
-    mistakeTagSaving.value = false
-  }
-}
-
-async function saveMistakeTag(item) {
-  await updateMistakeTag(item.id, { name: item.name })
-  await loadMistakeTags()
-}
-
-async function removeMistakeTag(id) {
-  if (!window.confirm('Delete this mistake tag?')) return
-  await deleteMistakeTag(id)
-  await loadMistakeTags()
-}
 function resetUILayout() {
   Object.keys(localStorage)
     .filter((key) => (
@@ -296,11 +165,7 @@ function resetUILayout() {
 }
 
 onMounted(async () => {
-  await Promise.all([
-    loadStrategyOptions(),
-    loadMistakeTags(),
-    loadBrokerAccounts(),
-  ])
+  await loadBrokerAccounts()
 })
 </script>
 
@@ -312,33 +177,12 @@ onMounted(async () => {
 .account-config-row { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
 .account-config-status, .account-config-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .account-error-copy { margin-top: 5px; color: var(--negative); font-size: 12px; }
-.compact-config-card { height: 480px; display: flex; flex-direction: column; overflow: hidden; }
-.compact-config-list { flex: 1; min-height: 0; overflow-y: auto; align-content: start; padding-right: 4px; }
-.compact-config-row { display: grid; align-items: center; gap: 8px; min-height: 52px; padding: 7px 9px; border: 1px solid #e6ecf6; border-radius: 10px; background: #fbfdff; }
-.strategy-compact-row { grid-template-columns: minmax(140px, 1fr) 104px auto auto; }
-.mistake-compact-row { grid-template-columns: minmax(160px, 1fr) auto; }
-.compact-config-row input { min-width: 0; }
-.compact-name-input, .compact-order-field input { height: 36px; padding-top: 6px; padding-bottom: 6px; }
-.compact-order-field, .compact-active-toggle, .compact-row-actions { display: flex; align-items: center; }
-.compact-order-field { gap: 6px; color: var(--tv-muted); font-size: 12px; white-space: nowrap; }
-.compact-order-field input { width: 62px; }
-.compact-active-toggle { gap: 6px; color: var(--tv-muted); font-size: 13px; white-space: nowrap; }
-.compact-active-toggle input { width: auto; }
-.compact-row-actions { justify-content: flex-end; gap: 6px; white-space: nowrap; }
-.compact-row-actions .small-btn { min-width: 62px; padding: 7px 10px; }
 .settings-reset-row { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-top: 18px; padding: 0 4px 18px; }
 @media (max-width: 980px) {
   .account-config-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .account-config-row { grid-template-columns: 1fr; }
-  .strategy-compact-row { grid-template-columns: minmax(140px, 1fr) 104px; }
-  .compact-active-toggle { grid-column: 1; }
-  .strategy-compact-row .compact-row-actions { grid-column: 2; grid-row: 2; }
 }
 @media (max-width: 620px) {
   .account-config-form { grid-template-columns: 1fr; }
-  .compact-config-card { height: 520px; }
-  .strategy-compact-row, .mistake-compact-row { grid-template-columns: 1fr; }
-  .strategy-compact-row .compact-row-actions, .compact-active-toggle { grid-column: 1; grid-row: auto; }
-  .compact-row-actions { justify-content: flex-start; }
 }
 </style>

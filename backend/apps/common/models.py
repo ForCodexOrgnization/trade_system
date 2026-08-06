@@ -73,17 +73,3 @@ class DashboardTab(models.Model):
 
     def __str__(self):
         return self.name
-
-
-class StrategyOption(models.Model):
-    name = models.CharField(max_length=80, unique=True)
-    is_active = models.BooleanField(default=True)
-    sort_order = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["sort_order", "name", "id"]
-
-    def __str__(self):
-        return self.name

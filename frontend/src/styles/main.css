@@ -158,16 +158,6 @@ textarea { resize: vertical; }
   display: grid;
   gap: 8px;
 }
-.review-item {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--line);
-}
-.review-item:last-child { border-bottom: none; }
-.review-date {
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
 .success-box p { margin: 6px 0; }
 .pagination-bar {
   display: flex;
@@ -249,11 +239,6 @@ textarea { resize: vertical; }
   max-width: 360px;
   border-radius: 12px;
   border: 1px solid var(--line);
-}
-.review-linked-trade {
-  color: var(--muted);
-  font-size: 14px;
-  margin-top: 6px;
 }
 .helper-row {
   display: flex;
@@ -1439,103 +1424,9 @@ body {
 .settings-copy { color: #334155; line-height: 1.6; }
 .settings-list { margin: 8px 0 0 18px; padding: 0; }
 .settings-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
-.journal-layout-wide {
-  grid-template-columns: 1fr;
-  gap: 14px;
-}
-.journal-form-grid {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px);
-  margin-bottom: 14px;
-}
-.journal-form-grid label {
-  display: grid;
-  gap: 8px;
-}
-.journal-date-field input {
-  max-width: 280px;
-}
-.journal-list-head {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.journal-list-filters {
-  min-width: 0;
-}
-.journal-linked-trade-block {
-  border: 1px solid #e9eef7;
-  border-radius: 16px;
-  padding: 14px;
-  margin-bottom: 16px;
-}
 .section-title.minor {
   font-size: 1rem;
   margin-bottom: 10px;
-}
-.journal-linked-trade-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.trade-option-chip {
-  background: #f8fbff;
-  color: #23324d;
-  border: 1px solid #dfe7f3;
-  border-radius: 14px;
-  padding: 10px 12px;
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-}
-.trade-option-chip.active {
-  background: #e8f0ff;
-  border-color: #2563eb;
-  color: #1744a3;
-}
-.trade-option-chip span {
-  color: #66748d;
-  font-size: 0.88rem;
-}
-.journal-entry-card.accordion {
-  padding: 0;
-  overflow: hidden;
-}
-.accordion-trigger {
-  width: 100%;
-  background: transparent;
-  color: inherit;
-  padding: 16px 0;
-  border-radius: 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-.accordion-trigger:hover {
-  background: transparent;
-}
-.accordion-indicator {
-  color: #2563eb;
-  font-size: 1.5rem;
-  line-height: 1;
-}
-.accordion-body {
-  padding: 0 0 16px;
-}
-.journal-inline-actions {
-  margin: 8px 0 12px;
-}
-.journal-text-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px 16px;
-}
-.journal-text-grid label {
-  display: grid;
-  gap: 8px;
-}
-.journal-text-grid label textarea {
-  min-height: 110px;
 }
 .helper-row {
   gap: 14px;
@@ -1551,44 +1442,9 @@ body {
   background: linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
   border: 1px solid #e6edf9;
 }
-.journal-shell {
-  margin-top: 6px;
-}
-.journal-surface {
-  border: 1px solid #e6edf9;
-  border-radius: 18px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
-}
-.journal-tab-card {
-  border: 1px solid #e6edf9;
-  background: linear-gradient(180deg, #ffffff 0%, #f7faff 100%);
-}
-.journal-tab-card .tv-panel-tabs {
-  padding: 4px;
-  background: #eef3fc;
-  border-radius: 999px;
-  width: fit-content;
-}
-.journal-tab-card .tv-panel-tabs .tv-subtab {
-  border-radius: 999px;
-  min-height: 42px;
-  padding: 10px 22px;
-  font-weight: 700;
-}
-.journal-tab-card .tv-panel-tabs .tv-subtab.active {
-  box-shadow: 0 8px 18px rgba(47, 99, 240, 0.26);
-}
 @media (max-width: 1200px) {
   .tv-dashboard-chart-grid-triple { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-grid { grid-template-columns: 1fr; }
-  .journal-layout-wide { grid-template-columns: 1fr; }
-  .journal-form-grid {
-    grid-template-columns: 1fr;
-  }
-  .journal-date-field input {
-    max-width: 100%;
-  }
 }
 @media (max-width: 860px) {
   .tv-nav { flex-direction: column; align-items: flex-start; }
@@ -1600,10 +1456,9 @@ body {
   .tv-dashboard-chart-grid-triple { grid-template-columns: 1fr; }
   .tv-stats-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .settings-status-grid { grid-template-columns: 1fr; }
-  .journal-text-grid { grid-template-columns: 1fr; }
 }
 
-/* v10.1 backend-persisted tabs + journal edit */
+/* v10.1 backend-persisted tabs */
 .sortable-chart-grid {
   align-items: start;
 }
@@ -1623,12 +1478,6 @@ body {
 .settings-form-grid span {
   display: grid;
   gap: 8px;
-}
-.journal-inline-actions {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  margin: 12px 0;
 }
 @media (max-width: 760px) {
   .settings-form-grid {
@@ -2120,157 +1969,5 @@ body {
     color: #6b7a99;
     font-size: 13px;
     line-height: 1.4;
-  }
-}
-
-/* journal + strategy settings enhancements */
-.tv-journal-card {
-  border: 1px solid var(--tv-line);
-  border-radius: 16px;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
-  overflow: hidden;
-  margin-bottom: 14px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-}
-.tv-journal-card .accordion-trigger {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 14px 16px;
-  background: transparent;
-  color: var(--tv-text);
-}
-.tv-journal-card .accordion-indicator {
-  font-size: 20px;
-  color: var(--tv-blue);
-}
-.tv-journal-card .accordion-body {
-  padding: 12px 16px 16px;
-  border-top: 1px solid var(--tv-line);
-}
-.journal-entry-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-.journal-entry-grid > div {
-  background: #f8faff;
-  border: 1px solid #e7eefc;
-  border-radius: 12px;
-  padding: 10px 12px;
-}
-.journal-list-card .section-title,
-.journal-form-card .section-title {
-  letter-spacing: 0.01em;
-}
-.journal-strategy-row {
-  grid-column: 1 / -1;
-  max-width: 320px;
-}
-.compact-strategy-select {
-  min-height: 40px;
-  max-width: 320px;
-  padding-top: 6px;
-  padding-bottom: 6px;
-}
-.journal-entry-content {
-  margin-top: 8px;
-  color: #1f2937;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.journal-entry-content-resizable {
-  width: 100%;
-  min-height: 120px;
-  max-height: 420px;
-  resize: vertical;
-  overflow: auto;
-  border: 1px solid #d7e3f8;
-  border-radius: 10px;
-  background: #fdfefe;
-  padding: 10px;
-  font: inherit;
-  line-height: 1.5;
-}
-.strategy-settings-grid {
-  align-items: end;
-}
-.strategy-list {
-  margin-top: 12px;
-  display: grid;
-  gap: 10px;
-}
-.strategy-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "main actions"
-    "status actions";
-  gap: 10px;
-  align-items: center;
-  border: 1px solid #e6ecf6;
-  border-radius: 12px;
-  padding: 10px;
-  background: #fbfdff;
-  overflow: hidden;
-}
-.strategy-row input {
-  min-width: 0;
-}
-.strategy-main-group {
-  grid-area: main;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px;
-  gap: 8px;
-  align-items: center;
-}
-.strategy-order-group {
-  display: grid;
-  gap: 4px;
-  color: var(--tv-muted);
-  font-size: 12px;
-}
-.strategy-order-group span {
-  line-height: 1;
-}
-.strategy-actions-fixed {
-  grid-area: actions;
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  align-self: center;
-}
-.strategy-actions-fixed .small-btn {
-  min-width: 72px;
-}
-.strategy-toggle {
-  grid-area: status;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--tv-muted);
-  font-size: 13px;
-  white-space: nowrap;
-}
-.strategy-toggle input {
-  width: auto;
-}
-@media (max-width: 900px) {
-  .journal-entry-grid {
-    grid-template-columns: 1fr;
-  }
-  .strategy-row {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "main"
-      "status"
-      "actions";
-  }
-  .strategy-main-group {
-    grid-template-columns: 1fr;
-  }
-  .strategy-actions-fixed {
-    justify-content: flex-start;
   }
 }

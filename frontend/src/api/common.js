@@ -136,10 +136,6 @@ export const deleteDashboardTab = async (id) => {
   }
 }
 
-export const fetchStrategyOptions = () => api.get('/common/strategy-options/')
-export const createStrategyOption = (payload) => api.post('/common/strategy-options/', payload)
-export const updateStrategyOption = (id, payload) => api.patch(`/common/strategy-options/${id}/`, payload)
-export const deleteStrategyOption = (id) => api.delete(`/common/strategy-options/${id}/`)
 export const fetchBrokerAccounts = () => api.get('/common/broker-accounts/')
 export const createBrokerAccount = (payload) => api.post('/common/broker-accounts/', payload)
 export const updateBrokerAccount = (id, payload) => api.patch(`/common/broker-accounts/${id}/`, payload)

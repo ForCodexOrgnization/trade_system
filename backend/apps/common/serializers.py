@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import BrokerAccount, DashboardTab, StrategyOption
+from .models import BrokerAccount, DashboardTab
 
 
 class BrokerAccountSerializer(serializers.ModelSerializer):
@@ -88,20 +88,6 @@ class DashboardTabSerializer(serializers.ModelSerializer):
             "visible_widgets",
             "filters",
             "panel_order",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = ["id", "created_at", "updated_at"]
-
-
-class StrategyOptionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = StrategyOption
-        fields = [
-            "id",
-            "name",
-            "is_active",
-            "sort_order",
             "created_at",
             "updated_at",
         ]

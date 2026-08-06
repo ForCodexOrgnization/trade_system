@@ -115,8 +115,8 @@ def _group_lifecycle_key(*, account_code, symbol, asset_class, direction, opened
     """
     Lifecycle identity for strategy-style trade groups.
 
-    This intentionally excludes PnL/qty aggregates so we can keep stable TradeGroup
-    ids (and attached reviews/journal data) even when calculation logic evolves.
+    This intentionally excludes PnL/qty aggregates so TradeGroup ids remain stable
+    when calculation logic evolves.
     """
     return (
         account_code or '',
@@ -1086,36 +1086,4 @@ def rebuild_all_trade_groups():
 
     stale_group_ids = [group.id for group in existing_groups if group.id not in retained_group_ids]
     if stale_group_ids:
-        stale_groups = list(
-            TradeGroup.all_objects.filter(id__in=stale_group_ids).prefetch_related(
-                'daily_reviews',
-                'daily_review_links',
-                'position_checkpoints',
-            )
-        )
-        deletable_ids = []
-        soft_delete_ids = []
-        for group in stale_groups:
-            has_user_links = any(
-                [
-                    hasattr(group, 'journal'),
-                    hasattr(group, 'trade_review'),
-                    hasattr(group, 'pretrade_snapshot'),
-                    group.daily_reviews.exists(),
-                    group.daily_review_links.exists(),
-                    group.position_checkpoints.exists(),
-                ]
-            )
-            if not has_user_links:
-                deletable_ids.append(group.id)
-            else:
-                soft_delete_ids.append(group.id)
-
-        if deletable_ids:
-            TradeGroup.all_objects.filter(id__in=deletable_ids).delete()
-        if soft_delete_ids:
-            TradeGroup.all_objects.filter(id__in=soft_delete_ids).update(
-                is_soft_deleted=True,
-                soft_deleted_at=timezone.now(),
-                soft_delete_reason='protected_during_rebuild',
-            )
+        TradeGroup.all_objects.filter(id__in=stale_group_ids).delete()

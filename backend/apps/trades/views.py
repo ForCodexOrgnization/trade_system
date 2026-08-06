@@ -1,9 +1,7 @@
 from collections import defaultdict
 from decimal import Decimal
-from datetime import datetime
 
 from django.db.models import Q
-from django.db import connection
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.generics import ListAPIView
@@ -14,7 +12,6 @@ from apps.common.accounts import resolve_request_account
 from apps.common.models import BrokerAccount
 from .models import RawIBKRExecution, TradeGroup
 from .serializers import TradeGroupSerializer, RawIBKRExecutionSerializer
-from apps.journal.models import TradeReview
 from apps.common.pagination import StandardPageNumberPagination
 
 
@@ -63,18 +60,6 @@ def _extract_strategy_from_payload(payload):
         or payload.get('order_reference')
         or ''
     ).strip()
-
-
-def _trade_review_column_exists(column_name):
-    table_name = TradeReview._meta.db_table
-    with connection.cursor() as cursor:
-        if table_name not in connection.introspection.table_names(cursor):
-            return False
-        columns = {
-            item.name
-            for item in connection.introspection.get_table_description(cursor, table_name)
-        }
-    return column_name in columns
 
 
 def _latest_groups_by_symbol(groups):
@@ -317,7 +302,6 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
         }
 
         all_win_loss_dates = sorted(set(daily_wins.keys()) | set(daily_losses.keys()))
-        process_charts = self._build_process_charts(groups)
         charts = {
             'daily_realized_pnl': {'labels': dates, 'values': [float(by_date[d]) for d in dates]},
             'pnl_trend': [{'date': d, 'realized_pnl': str(by_date[d])} for d in dates],
@@ -346,123 +330,8 @@ class TradeGroupViewSet(ReadOnlyModelViewSet):
                 }
                 for d in dates
             ],
-            **process_charts,
         }
         return charts
-
-    def _build_process_charts(self, groups):
-        if not _trade_review_column_exists('would_take_again'):
-            return {
-                'pnl_by_setup': {'labels': [], 'values': []},
-                'win_rate_by_setup': {'labels': [], 'values': []},
-                'avg_r_by_setup': {'labels': [], 'values': []},
-                'pnl_by_session': {'labels': [], 'values': []},
-                'rule_violations_count': 0,
-                'mistake_tag_ranking': [],
-                'early_exit_rate': 0.0,
-                'over_hold_rate': 0.0,
-                'overnight_vs_intraday_pnl': {'labels': ['overnight', 'intraday'], 'values': [0, 0]},
-                'first_vs_later_pnl': {'labels': ['first_trade', 'later_trades'], 'values': [0, 0]},
-                'same_symbol_repeated_performance': {'labels': ['repeated_symbol', 'single_touch_symbol'], 'values': [0, 0]},
-            }
-        group_ids = [item.id for item in groups]
-        reviews = (
-            TradeReview.objects.filter(trade_group_id__in=group_ids)
-            .select_related('trade_group', 'setup')
-            .prefetch_related('mistake_tags')
-        )
-        pnl_by_setup = defaultdict(Decimal)
-        wins_by_setup = defaultdict(int)
-        totals_by_setup = defaultdict(int)
-        r_by_setup = defaultdict(Decimal)
-        r_count_by_setup = defaultdict(int)
-        pnl_by_session = defaultdict(Decimal)
-        mistake_counts = defaultdict(int)
-        overnight_vs_intraday = {'overnight': Decimal('0'), 'intraday': Decimal('0')}
-        first_vs_later = {'first_trade': Decimal('0'), 'later_trades': Decimal('0')}
-        repeated_symbol = {'repeated_symbol': Decimal('0'), 'single_touch_symbol': Decimal('0')}
-        rule_violations_count = 0
-        early_exit_count = 0
-        over_hold_count = 0
-
-        by_day = defaultdict(list)
-        for group in groups:
-            by_day[str(group.trade_date)].append(group)
-        first_trade_ids = set()
-        for day_groups in by_day.values():
-            fallback_start = timezone.make_aware(datetime(1970, 1, 1))
-            day_sorted = sorted(day_groups, key=lambda g: (g.opened_at or fallback_start, g.id))
-            if day_sorted:
-                first_trade_ids.add(day_sorted[0].id)
-        symbol_counts = defaultdict(int)
-        for group in groups:
-            symbol_counts[group.symbol] += 1
-
-        for review in reviews:
-            group = review.trade_group
-            pnl = _safe_decimal(group.realized_pnl)
-            setup_name = review.setup.name if review.setup else 'Unspecified'
-            session_name = review.session or 'unspecified'
-            pnl_by_setup[setup_name] += pnl
-            totals_by_setup[setup_name] += 1
-            if pnl > ZERO:
-                wins_by_setup[setup_name] += 1
-            if review.realized_r is not None:
-                r_by_setup[setup_name] += _safe_decimal(review.realized_r)
-                r_count_by_setup[setup_name] += 1
-            pnl_by_session[session_name] += pnl
-            if review.followed_plan is False:
-                rule_violations_count += 1
-            improve_text = (review.what_to_improve or '').lower()
-            if 'early' in improve_text:
-                early_exit_count += 1
-            if 'overhold' in improve_text or 'over hold' in improve_text:
-                over_hold_count += 1
-            for tag in review.mistake_tags.all():
-                mistake_counts[tag.name] += 1
-
-            is_overnight = bool(group.closed_at and group.opened_at and group.closed_at.date() > group.opened_at.date())
-            overnight_vs_intraday['overnight' if is_overnight else 'intraday'] += pnl
-            first_vs_later['first_trade' if group.id in first_trade_ids else 'later_trades'] += pnl
-            repeated_symbol['repeated_symbol' if symbol_counts[group.symbol] > 1 else 'single_touch_symbol'] += pnl
-
-        setup_labels = sorted(pnl_by_setup.keys())
-        win_rate_by_setup = [
-            (Decimal(wins_by_setup[label]) / Decimal(totals_by_setup[label]) * Decimal('100'))
-            if totals_by_setup[label] else ZERO
-            for label in setup_labels
-        ]
-        avg_r_by_setup = [
-            (r_by_setup[label] / Decimal(r_count_by_setup[label])) if r_count_by_setup[label] else ZERO
-            for label in setup_labels
-        ]
-        mistake_sorted = sorted(mistake_counts.items(), key=lambda item: item[1], reverse=True)
-
-        return {
-            'pnl_by_setup': {'labels': setup_labels, 'values': [float(pnl_by_setup[label]) for label in setup_labels]},
-            'win_rate_by_setup': {'labels': setup_labels, 'values': [float(round(item, 2)) for item in win_rate_by_setup]},
-            'avg_r_by_setup': {'labels': setup_labels, 'values': [float(round(item, 4)) for item in avg_r_by_setup]},
-            'pnl_by_session': {
-                'labels': sorted(pnl_by_session.keys()),
-                'values': [float(pnl_by_session[label]) for label in sorted(pnl_by_session.keys())],
-            },
-            'rule_violations_count': rule_violations_count,
-            'mistake_tag_ranking': [{'label': key, 'count': value} for key, value in mistake_sorted[:10]],
-            'early_exit_rate': float(round((Decimal(early_exit_count) / Decimal(len(reviews)) * Decimal('100')), 2)) if reviews else 0.0,
-            'over_hold_rate': float(round((Decimal(over_hold_count) / Decimal(len(reviews)) * Decimal('100')), 2)) if reviews else 0.0,
-            'overnight_vs_intraday_pnl': {
-                'labels': ['overnight', 'intraday'],
-                'values': [float(overnight_vs_intraday['overnight']), float(overnight_vs_intraday['intraday'])],
-            },
-            'first_vs_later_pnl': {
-                'labels': ['first_trade', 'later_trades'],
-                'values': [float(first_vs_later['first_trade']), float(first_vs_later['later_trades'])],
-            },
-            'same_symbol_repeated_performance': {
-                'labels': ['repeated_symbol', 'single_touch_symbol'],
-                'values': [float(repeated_symbol['repeated_symbol']), float(repeated_symbol['single_touch_symbol'])],
-            },
-        }
 
     def _build_widgets(self, summary, charts):
         return [
