@@ -1,0 +1,534 @@
+import csv
+import hashlib
+import io
+import json
+from datetime import datetime
+from decimal import Decimal
+
+from django.db import transaction
+from django.db.models import Avg, Count, Sum
+from django.utils import timezone
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ParseError, ValidationError
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.common.accounts import resolve_request_account
+from apps.trades.models import RawIBKRExecution, TradeFill
+from apps.trades.services import create_fill_from_raw
+
+from .models import (
+    Attempt,
+    AttemptFill,
+    AuditEvent,
+    Campaign,
+    CampaignReview,
+    DecisionSnapshot,
+    Scenario,
+    Session,
+    SessionReview,
+    TradingDay,
+)
+from .serializers import (
+    AttemptSerializer,
+    CampaignReviewSerializer,
+    CampaignSerializer,
+    DecisionSnapshotSerializer,
+    FillSummarySerializer,
+    SessionReviewSerializer,
+    SessionSerializer,
+    TradingDaySerializer,
+)
+
+
+ZERO = Decimal("0")
+
+
+def _decimal(value):
+    return Decimal(str(value or 0))
+
+
+def _campaign_account(campaign):
+    return campaign.session.trading_day.account
+
+
+def _audit(account, aggregate, event_type, payload=None):
+    AuditEvent.objects.create(
+        account=account,
+        aggregate_type=aggregate.__class__.__name__.lower(),
+        aggregate_id=aggregate.id,
+        event_type=event_type,
+        payload=payload or {},
+    )
+
+
+def _recalculate_attempt(attempt):
+    fills = list(
+        TradeFill.objects.filter(journal_attempt_link__attempt=attempt)
+        .select_related("raw_execution")
+        .order_by("executed_at", "id")
+    )
+    if not fills:
+        Attempt.objects.filter(pk=attempt.pk).update(
+            status="pending", entry_at=None, exit_at=None, realized_pnl=ZERO, result_r=ZERO,
+        )
+        return
+    net_qty = sum((_decimal(item.signed_qty) for item in fills), ZERO)
+    realized_pnl = sum(
+        (_decimal(item.raw_execution.realized_pnl) - _decimal(item.commission) for item in fills),
+        ZERO,
+    )
+    status_value = "closed" if net_qty == ZERO else "open" if len(fills) == 1 else "scaling"
+    risk_amount = _decimal(attempt.campaign.planned_risk_amount)
+    result_r = realized_pnl / risk_amount if risk_amount > ZERO else ZERO
+    Attempt.objects.filter(pk=attempt.pk).update(
+        status=status_value,
+        entry_at=fills[0].executed_at,
+        exit_at=fills[-1].executed_at if status_value == "closed" else None,
+        realized_pnl=realized_pnl,
+        result_r=result_r,
+    )
+
+
+def _recalculate_campaign(campaign):
+    attempts = Campaign.objects.get(pk=campaign.pk).attempts.exclude(status="voided")
+    totals = attempts.aggregate(realized_pnl=Sum("realized_pnl"), result_r=Sum("result_r"))
+    realized_pnl = totals["realized_pnl"] or ZERO
+    result_r = totals["result_r"] or ZERO
+    Campaign.objects.filter(pk=campaign.pk).update(realized_pnl=realized_pnl, result_r=result_r)
+    session = campaign.session
+    session_total = Campaign.objects.filter(session=session).exclude(status="cancelled").aggregate(value=Sum("result_r"))["value"] or ZERO
+    Session.objects.filter(pk=session.pk).update(result_r=session_total)
+    day = session.trading_day
+    day_totals = Campaign.objects.filter(session__trading_day=day).exclude(status="cancelled").aggregate(
+        pnl=Sum("realized_pnl"), result_r=Sum("result_r")
+    )
+    TradingDay.objects.filter(pk=day.pk).update(
+        realized_pnl=day_totals["pnl"] or ZERO,
+        total_r=day_totals["result_r"] or ZERO,
+    )
+
+
+class AccountScopedViewSet(viewsets.ModelViewSet):
+    def request_account(self):
+        if not hasattr(self, "_journal_account"):
+            self._journal_account = resolve_request_account(self.request)
+        return self._journal_account
+
+
+class TradingDayViewSet(AccountScopedViewSet):
+    serializer_class = TradingDaySerializer
+    queryset = TradingDay.objects.select_related("account").prefetch_related(
+        "sessions__campaigns__decision_snapshot__scenarios",
+        "sessions__campaigns__attempts__fill_links__fill",
+        "sessions__campaigns__review",
+        "sessions__review",
+    )
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(account=self.request_account())
+        trade_date = self.request.query_params.get("date")
+        return qs.filter(trade_date=trade_date) if trade_date else qs
+
+    def perform_create(self, serializer):
+        day = serializer.save(account=self.request_account())
+        _audit(day.account, day, "TradingDayCreated")
+
+    @action(detail=False, methods=["get", "post"], url_path="today")
+    def today(self, request):
+        account = self.request_account()
+        trade_date = request.query_params.get("date") or request.data.get("trade_date") or timezone.localdate()
+        day = self.get_queryset().filter(trade_date=trade_date).first()
+        if request.method == "POST" and not day:
+            day = TradingDay.objects.create(
+                account=account,
+                trade_date=trade_date,
+                status=request.data.get("status", "draft"),
+                daily_risk_limit=request.data.get("daily_risk_limit") or None,
+                max_trades=request.data.get("max_trades") or None,
+                market_environment=request.data.get("market_environment", ""),
+            )
+            _audit(account, day, "TradingDayCreated")
+        fills = TradeFill.objects.filter(
+            raw_execution__broker_account=account,
+            trade_day=trade_date,
+            journal_attempt_link__isnull=True,
+        ).order_by("executed_at", "id")
+        return Response({
+            "trading_day": TradingDaySerializer(day).data if day else None,
+            "ungrouped_fills": FillSummarySerializer(fills, many=True).data,
+        })
+
+
+class SessionViewSet(AccountScopedViewSet):
+    serializer_class = SessionSerializer
+    queryset = Session.objects.select_related("trading_day__account").prefetch_related(
+        "campaigns__decision_snapshot__scenarios", "campaigns__attempts__fill_links__fill", "campaigns__review"
+    )
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(trading_day__account=self.request_account())
+        day_id = self.request.query_params.get("trading_day")
+        return qs.filter(trading_day_id=day_id) if day_id else qs
+
+    def perform_create(self, serializer):
+        day = serializer.validated_data["trading_day"]
+        if day.account_id != self.request_account().id:
+            raise ValidationError("Trading day belongs to another account.")
+        session = serializer.save()
+        _audit(day.account, session, "SessionCreated")
+
+    @action(detail=True, methods=["post"])
+    def start(self, request, pk=None):
+        session = self.get_object()
+        if session.status not in ("planned", "active"):
+            raise ParseError("Only a planned session can be started.")
+        session.status = "active"
+        session.start_at = session.start_at or timezone.now()
+        session.save(update_fields=["status", "start_at", "updated_at"])
+        TradingDay.objects.filter(pk=session.trading_day_id, status="draft").update(status="active")
+        _audit(session.trading_day.account, session, "SessionStarted")
+        return Response(self.get_serializer(session).data)
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        session = self.get_object()
+        if session.campaigns.filter(status__in=["active", "paused"]).exists():
+            raise ParseError("Close or cancel active campaigns first.")
+        session.status = "closed"
+        session.end_at = session.end_at or timezone.now()
+        session.save(update_fields=["status", "end_at", "updated_at"])
+        _audit(session.trading_day.account, session, "SessionClosed")
+        return Response(self.get_serializer(session).data)
+
+    @action(detail=True, methods=["post"])
+    def review(self, request, pk=None):
+        session = self.get_object()
+        serializer = SessionReviewSerializer(data=request.data, instance=getattr(session, "review", None))
+        serializer.is_valid(raise_exception=True)
+        serializer.save(session=session)
+        session.status = "reviewed"
+        session.save(update_fields=["status", "updated_at"])
+        _audit(session.trading_day.account, session, "SessionReviewed")
+        return Response(self.get_serializer(session).data)
+
+
+class CampaignViewSet(AccountScopedViewSet):
+    serializer_class = CampaignSerializer
+    queryset = Campaign.objects.select_related("session__trading_day__account", "decision_snapshot").prefetch_related(
+        "decision_snapshot__scenarios", "attempts__fill_links__fill", "review"
+    )
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(session__trading_day__account=self.request_account())
+        for param, field in (("session", "session_id"), ("status", "status"), ("date", "session__trading_day__trade_date")):
+            value = self.request.query_params.get(param)
+            if value:
+                qs = qs.filter(**{field: value})
+        return qs
+
+    def perform_create(self, serializer):
+        session = serializer.validated_data["session"]
+        if session.trading_day.account_id != self.request_account().id:
+            raise ValidationError("Session belongs to another account.")
+        campaign = serializer.save(symbol=serializer.validated_data["symbol"].strip().upper())
+        _audit(self.request_account(), campaign, "CampaignCreated")
+
+    @action(detail=True, methods=["post"], url_path="decision-snapshot")
+    def decision_snapshot(self, request, pk=None):
+        campaign = self.get_object()
+        if hasattr(campaign, "decision_snapshot"):
+            raise ParseError("The original decision snapshot is immutable and already exists.")
+        scenarios = request.data.get("scenarios") or []
+        if len(scenarios) not in (2, 3):
+            raise ValidationError({"scenarios": "Exactly 2 or 3 scenarios are required."})
+        probabilities = [_decimal(item.get("probability")) for item in scenarios]
+        total = sum(probabilities, ZERO)
+        if not Decimal("99") <= total <= Decimal("101"):
+            raise ValidationError({"scenarios": "Scenario probabilities must total between 99 and 101."})
+        for index, item in enumerate(scenarios):
+            probability = probabilities[index]
+            if not Decimal("1") <= probability <= Decimal("99"):
+                raise ValidationError({"scenarios": "Each probability must be between 1 and 99."})
+            for field in ("name", "confirmation", "contradiction", "planned_action"):
+                if not str(item.get(field) or "").strip():
+                    raise ValidationError({"scenarios": f"Scenario {index + 1} requires {field}."})
+        serializer = DecisionSnapshotSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            snapshot = serializer.save(campaign=campaign)
+            for index, item in enumerate(scenarios):
+                Scenario.objects.create(
+                    snapshot=snapshot,
+                    name=item["name"],
+                    probability=probabilities[index],
+                    confirmation=item["confirmation"],
+                    contradiction=item["contradiction"],
+                    planned_action=item["planned_action"],
+                    sort_order=index,
+                )
+            snapshot = DecisionSnapshot.objects.prefetch_related("scenarios").get(pk=snapshot.pk)
+            raw = json.dumps(snapshot.canonical_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            final_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            DecisionSnapshot.objects.filter(pk=snapshot.pk).update(immutable_snapshot_hash=final_hash)
+            _audit(_campaign_account(campaign), campaign, "DecisionSnapshotCreated", {"hash": final_hash})
+        return Response(CampaignSerializer(self.get_object()).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        campaign = self.get_object()
+        if not hasattr(campaign, "decision_snapshot"):
+            raise ParseError("Create a decision snapshot before activation.")
+        readiness = CampaignSerializer(campaign).data["readiness"]
+        if not readiness["ready"]:
+            raise ValidationError({"readiness": readiness})
+        campaign.status = "active"
+        campaign.save(update_fields=["status", "updated_at"])
+        _audit(_campaign_account(campaign), campaign, "CampaignActivated")
+        return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["post"], url_path="attach-fills")
+    def attach_fills(self, request, pk=None):
+        campaign = self.get_object()
+        fill_ids = request.data.get("fill_ids") or []
+        if not fill_ids:
+            raise ValidationError({"fill_ids": "Select at least one fill."})
+        fills = list(TradeFill.objects.filter(
+            id__in=fill_ids,
+            raw_execution__broker_account=self.request_account(),
+        ).select_related("raw_execution"))
+        if len(fills) != len(set(map(int, fill_ids))):
+            raise ValidationError({"fill_ids": "One or more fills are unavailable for this account."})
+        if any(item.symbol.upper() != campaign.symbol.upper() for item in fills):
+            raise ValidationError({"fill_ids": "All fills must match the campaign symbol."})
+        attempt_id = request.data.get("attempt_id")
+        with transaction.atomic():
+            if attempt_id:
+                attempt = campaign.attempts.filter(pk=attempt_id).first()
+                if not attempt:
+                    raise ValidationError({"attempt_id": "Attempt does not belong to this campaign."})
+            else:
+                sequence = (campaign.attempts.order_by("-sequence_no").values_list("sequence_no", flat=True).first() or 0) + 1
+                if sequence > campaign.max_attempts:
+                    raise ValidationError({"attempt": "Campaign maximum attempts has been reached."})
+                attempt = Attempt.objects.create(
+                    campaign=campaign,
+                    sequence_no=sequence,
+                    planned_risk_r=request.data.get("planned_risk_r") or campaign.max_risk_r,
+                    reentry_reason=request.data.get("reentry_reason", ""),
+                    what_changed=request.data.get("what_changed", ""),
+                    was_planned=request.data.get("was_planned", True),
+                )
+            old_attempts = set()
+            previous_assignments = {}
+            for fill in fills:
+                link = AttemptFill.objects.filter(fill=fill).first()
+                previous_assignments[str(fill.id)] = str(link.attempt_id) if link else None
+                if link:
+                    old_attempts.add(link.attempt)
+                    link.attempt = attempt
+                    link.save(update_fields=["attempt", "updated_at"])
+                else:
+                    AttemptFill.objects.create(attempt=attempt, fill=fill)
+            for old in old_attempts:
+                if old.pk != attempt.pk:
+                    _recalculate_attempt(old)
+                    _recalculate_campaign(old.campaign)
+            _recalculate_attempt(attempt)
+            _recalculate_campaign(campaign)
+            if campaign.status == "planned":
+                Campaign.objects.filter(pk=campaign.pk).update(status="active")
+            _audit(_campaign_account(campaign), campaign, "FillsAttached", {
+                "attempt_id": str(attempt.id),
+                "fill_ids": list(map(int, fill_ids)),
+                "previous_assignments": previous_assignments,
+            })
+        return Response(self.get_serializer(self.get_object()).data)
+
+    @action(detail=True, methods=["post"], url_path="undo-grouping")
+    def undo_grouping(self, request, pk=None):
+        campaign = self.get_object()
+        last_event = AuditEvent.objects.filter(aggregate_id=campaign.id).order_by("-occurred_at").first()
+        if not last_event or last_event.event_type != "FillsAttached":
+            raise ParseError("There is no immediately reversible grouping action.")
+        previous = last_event.payload.get("previous_assignments") or {}
+        if not previous:
+            raise ParseError("The last grouping action has no reversal data.")
+        affected_attempts = set()
+        affected_campaigns = {campaign}
+        with transaction.atomic():
+            for fill_id, previous_attempt_id in previous.items():
+                link = AttemptFill.objects.filter(fill_id=fill_id).select_related("attempt__campaign").first()
+                if link:
+                    affected_attempts.add(link.attempt)
+                    affected_campaigns.add(link.attempt.campaign)
+                if previous_attempt_id:
+                    prior_attempt = Attempt.objects.filter(
+                        pk=previous_attempt_id,
+                        campaign__session__trading_day__account=self.request_account(),
+                    ).select_related("campaign").first()
+                    if not prior_attempt:
+                        raise ParseError("The previous attempt is no longer available.")
+                    affected_attempts.add(prior_attempt)
+                    affected_campaigns.add(prior_attempt.campaign)
+                    if link:
+                        link.attempt = prior_attempt
+                        link.save(update_fields=["attempt", "updated_at"])
+                    else:
+                        AttemptFill.objects.create(attempt=prior_attempt, fill_id=fill_id)
+                elif link:
+                    link.delete()
+            for attempt in affected_attempts:
+                _recalculate_attempt(attempt)
+            for affected_campaign in affected_campaigns:
+                _recalculate_campaign(affected_campaign)
+            _audit(_campaign_account(campaign), campaign, "GroupingUndone", {"reversed_event_id": str(last_event.id)})
+        return Response(self.get_serializer(self.get_object()).data)
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        campaign = self.get_object()
+        for attempt in campaign.attempts.all():
+            _recalculate_attempt(attempt)
+        _recalculate_campaign(campaign)
+        campaign.refresh_from_db()
+        if campaign.attempts.exclude(status__in=["closed", "voided"]).exists():
+            raise ParseError("All attempts must be closed before the campaign can close.")
+        campaign.status = "review_pending"
+        campaign.closed_at = timezone.now()
+        campaign.save(update_fields=["status", "closed_at", "updated_at"])
+        _audit(_campaign_account(campaign), campaign, "CampaignClosed")
+        return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["post"])
+    def review(self, request, pk=None):
+        campaign = self.get_object()
+        if campaign.status not in ("closed", "review_pending", "reviewed"):
+            raise ParseError("Close the campaign before reviewing it.")
+        existing = getattr(campaign, "review", None)
+        serializer = CampaignReviewSerializer(instance=existing, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        review = serializer.save(campaign=campaign)
+        campaign.status = "reviewed"
+        campaign.save(update_fields=["status", "updated_at"])
+        _audit(_campaign_account(campaign), campaign, "CampaignReviewed", {"decision_grade": review.decision_grade})
+        return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["get"])
+    def audit(self, request, pk=None):
+        campaign = self.get_object()
+        rows = AuditEvent.objects.filter(aggregate_id=campaign.id).values(
+            "id", "event_type", "payload", "occurred_at"
+        )
+        return Response(list(rows))
+
+
+class AttemptViewSet(AccountScopedViewSet):
+    serializer_class = AttemptSerializer
+    queryset = Attempt.objects.select_related("campaign__session__trading_day__account").prefetch_related("fill_links__fill")
+
+    def get_queryset(self):
+        return super().get_queryset().filter(campaign__session__trading_day__account=self.request_account())
+
+    def perform_create(self, serializer):
+        campaign = serializer.validated_data["campaign"]
+        if _campaign_account(campaign).id != self.request_account().id:
+            raise ValidationError("Campaign belongs to another account.")
+        sequence = (campaign.attempts.order_by("-sequence_no").values_list("sequence_no", flat=True).first() or 0) + 1
+        serializer.save(sequence_no=sequence)
+
+
+class JournalAnalyticsAPIView(APIView):
+    def get(self, request):
+        account = resolve_request_account(request)
+        campaigns = Campaign.objects.filter(session__trading_day__account=account).exclude(status="cancelled")
+        setup_rows = list(campaigns.values("setup").annotate(
+            campaigns=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r")
+        ).order_by("-total_r"))
+        session_rows = list(campaigns.values("session__session_type").annotate(
+            campaigns=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r")
+        ).order_by("session__session_type"))
+        planned = campaigns.filter(decision_snapshot__isnull=False).aggregate(count=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r"))
+        unplanned = campaigns.filter(decision_snapshot__isnull=True).aggregate(count=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r"))
+        sequence_rows = list(Attempt.objects.filter(campaign__in=campaigns).values("sequence_no").annotate(
+            attempts=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r")
+        ).order_by("sequence_no"))
+        return Response({
+            "setup": setup_rows,
+            "session": session_rows,
+            "plan_comparison": {"planned": planned, "unplanned": unplanned},
+            "attempt_sequence": sequence_rows,
+            "sample_size": campaigns.count(),
+        })
+
+
+class JournalFillImportAPIView(APIView):
+    """Import a small, explicit CSV into the immutable broker fact layer."""
+
+    REQUIRED_COLUMNS = {"symbol", "side", "quantity", "price", "executed_at"}
+
+    def post(self, request):
+        account = resolve_request_account(request)
+        upload = request.FILES.get("file")
+        if not upload:
+            raise ValidationError({"file": "Choose a CSV file."})
+        try:
+            text = upload.read().decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValidationError({"file": "CSV must be UTF-8 encoded."}) from exc
+        reader = csv.DictReader(io.StringIO(text))
+        headers = {str(item or "").strip().lower() for item in (reader.fieldnames or [])}
+        missing = sorted(self.REQUIRED_COLUMNS - headers)
+        if missing:
+            raise ValidationError({"file": f"Missing columns: {', '.join(missing)}"})
+        imported = 0
+        duplicates = 0
+        errors = []
+        with transaction.atomic():
+            for row_no, original in enumerate(reader, start=2):
+                row = {str(key or "").strip().lower(): str(value or "").strip() for key, value in original.items()}
+                try:
+                    side = row["side"].upper()
+                    if side not in ("BUY", "SELL"):
+                        raise ValueError("side must be BUY or SELL")
+                    executed_at = datetime.fromisoformat(row["executed_at"].replace("Z", "+00:00"))
+                    if timezone.is_naive(executed_at):
+                        executed_at = timezone.make_aware(executed_at, timezone.get_current_timezone())
+                    execution_id = row.get("execution_id") or row.get("broker_fill_id") or ""
+                    identity = execution_id or "|".join([
+                        row["symbol"].upper(), side, row["quantity"], row["price"], executed_at.isoformat(),
+                    ])
+                    dedupe_key = hashlib.sha256(f"csv|{account.account_code}|{identity}".encode()).hexdigest()
+                    raw, created = RawIBKRExecution.objects.get_or_create(
+                        dedupe_key=dedupe_key,
+                        defaults={
+                            "broker_account": account,
+                            "broker": row.get("broker") or "csv",
+                            "execution_id": execution_id or None,
+                            "order_id": row.get("order_id") or None,
+                            "account": account.account_code,
+                            "symbol": row["symbol"].upper(),
+                            "local_symbol": row.get("local_symbol") or None,
+                            "sec_type": row.get("sec_type") or row.get("asset_class") or "",
+                            "currency": row.get("currency") or "USD",
+                            "side": side,
+                            "quantity": row["quantity"],
+                            "price": row["price"],
+                            "commission": row.get("commission") or 0,
+                            "realized_pnl": row.get("realized_pnl") or None,
+                            "executed_at": executed_at,
+                            "trade_date": row.get("trade_date") or executed_at.date(),
+                            "raw_payload": {"source": "journal_csv", "row": row_no},
+                        },
+                    )
+                    if created:
+                        create_fill_from_raw(raw)
+                        imported += 1
+                    else:
+                        duplicates += 1
+                except (ValueError, TypeError) as exc:
+                    errors.append({"row": row_no, "error": str(exc)})
+            if errors:
+                raise ValidationError({"rows": errors[:20]})
+        return Response({"imported": imported, "duplicates": duplicates})
