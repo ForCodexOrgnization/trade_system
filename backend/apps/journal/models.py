@@ -40,20 +40,34 @@ class TradingDay(TimestampedModel):
         constraints = [models.UniqueConstraint(fields=["account", "trade_date"], name="journal_unique_trading_day")]
 
 
-class Session(TimestampedModel):
+class DecisionContext(TimestampedModel):
+    KIND_CHOICES = [("intraday", "Intraday"), ("swing", "Swing")]
+    POSITION_STAGE_CHOICES = [
+        ("idea_validation", "Idea Validation"), ("initial_entry", "Initial Entry"),
+        ("position_building", "Position Building"), ("holding", "Holding"),
+        ("risk_reduction", "Risk Reduction"), ("exit", "Exit"),
+    ]
     TYPE_CHOICES = [
         ("premarket", "Premarket"),
         ("opening", "Opening"),
         ("morning", "Morning"),
         ("midday", "Midday"),
         ("power_hour", "Power Hour"),
+        ("idea_validation", "Idea Validation"),
+        ("initial_entry", "Initial Entry"),
+        ("position_building", "Position Building"),
+        ("holding", "Holding"),
+        ("risk_reduction", "Risk Reduction"),
+        ("exit", "Exit"),
         ("custom", "Custom"),
     ]
     STATUS_CHOICES = [("planned", "Planned"), ("active", "Active"), ("closed", "Closed"), ("reviewed", "Reviewed")]
 
-    trading_day = models.ForeignKey(TradingDay, on_delete=models.CASCADE, related_name="sessions")
+    account = models.ForeignKey("common.BrokerAccount", on_delete=models.PROTECT, related_name="journal_decision_contexts")
+    trading_day = models.ForeignKey(TradingDay, on_delete=models.CASCADE, related_name="contexts", null=True, blank=True)
     name = models.CharField(max_length=100)
-    session_type = models.CharField(max_length=24, choices=TYPE_CHOICES, default="custom")
+    context_kind = models.CharField(max_length=16, choices=KIND_CHOICES, default="intraday")
+    context_type = models.CharField(max_length=32, choices=TYPE_CHOICES, default="custom")
     start_at = models.DateTimeField(null=True, blank=True)
     end_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="planned")
@@ -70,6 +84,12 @@ class Session(TimestampedModel):
     class Meta:
         ordering = ["start_at", "created_at"]
 
+    def clean(self):
+        if self.context_kind == "intraday" and not self.trading_day_id:
+            raise ValidationError("Intraday decision contexts require a trading day.")
+        if self.context_kind == "swing" and self.trading_day_id:
+            raise ValidationError("Swing decision contexts must not be tied to a trading day.")
+
 
 class Campaign(TimestampedModel):
     DIRECTION_CHOICES = [("long", "Long"), ("short", "Short"), ("neutral", "Neutral")]
@@ -84,7 +104,8 @@ class Campaign(TimestampedModel):
         ("cancelled", "Cancelled"),
     ]
 
-    session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name="campaigns")
+    account = models.ForeignKey("common.BrokerAccount", on_delete=models.PROTECT, related_name="journal_campaigns")
+    context = models.ForeignKey(DecisionContext, on_delete=models.PROTECT, related_name="campaigns")
     symbol = models.CharField(max_length=64)
     direction = models.CharField(max_length=12, choices=DIRECTION_CHOICES)
     setup = models.CharField(max_length=100)
@@ -228,14 +249,40 @@ class CampaignReview(TimestampedModel):
     lesson = models.TextField()
 
 
-class SessionReview(TimestampedModel):
-    session = models.OneToOneField(Session, on_delete=models.CASCADE, related_name="review")
+class DecisionContextReview(TimestampedModel):
+    context = models.OneToOneField(DecisionContext, on_delete=models.CASCADE, related_name="review")
     preventable_loss_r = models.DecimalField(max_digits=10, decimal_places=4, default=0)
     normal_variance_r = models.DecimalField(max_digits=10, decimal_places=4, default=0)
     overtrading_flag = models.BooleanField(default=False)
     best_decision = models.TextField(blank=True, default="")
     main_mistake = models.TextField(blank=True, default="")
     next_rule = models.TextField(blank=True, default="")
+
+
+class DecisionUpdate(TimestampedModel):
+    EVENT_CHOICES = [
+        ("price_action", "Price Action"),
+        ("economic_data", "Economic Data"),
+        ("news", "News"),
+        ("earnings", "Earnings"),
+        ("risk_event", "Risk Event"),
+        ("time_review", "Scheduled Review"),
+        ("custom", "Custom"),
+    ]
+
+    campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name="decision_updates")
+    position_stage = models.CharField(max_length=32, choices=DecisionContext.POSITION_STAGE_CHOICES)
+    event_type = models.CharField(max_length=24, choices=EVENT_CHOICES, default="price_action")
+    event_at = models.DateTimeField()
+    observed_evidence = models.JSONField(default=list)
+    interpretation = models.TextField()
+    decision = models.TextField()
+    risk_change = models.TextField(blank=True, default="")
+    invalidation_update = models.TextField(blank=True, default="")
+    next_review_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["event_at", "created_at"]
 
 
 class AuditEvent(models.Model):

@@ -58,24 +58,25 @@
         <div class="journal-workspace-grid">
           <section class="journal-column">
             <div class="column-heading">
-              <div><div class="section-title">{{ t('sessions') }}</div><span class="muted-copy">{{ t('sessionsHelp') }}</span></div>
-              <button class="secondary small-btn" @click="showSessionForm = !showSessionForm">{{ showSessionForm ? t('cancel') : t('newSession') }}</button>
+              <div><div class="section-title">{{ t('decisionContexts') }}</div><span class="muted-copy">{{ t('decisionContextsHelp') }}</span></div>
+              <button class="secondary small-btn" @click="showSessionForm = !showSessionForm">{{ showSessionForm ? t('cancel') : t('newContext') }}</button>
             </div>
 
             <form v-if="showSessionForm" class="card inline-journal-form" @submit.prevent="createSession">
+              <label><span>{{ t('contextKind') }}</span><select v-model="sessionForm.context_kind" @change="syncContextType"><option value="intraday">{{ t('intradayContext') }}</option><option value="swing">{{ t('swingContext') }}</option></select></label>
               <label><span>{{ t('name') }}</span><input v-model.trim="sessionForm.name" required :placeholder="t('openingSession')" /></label>
-              <label><span>{{ t('type') }}</span><select v-model="sessionForm.session_type"><option v-for="item in sessionTypes" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+              <label><span>{{ sessionForm.context_kind === 'swing' ? t('positionStage') : t('timeSegment') }}</span><select v-model="sessionForm.context_type"><option v-for="item in sessionForm.context_kind === 'swing' ? positionStages : sessionTypes" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
               <label><span>{{ t('riskLimitR') }}</span><input v-model.number="sessionForm.risk_limit_r" type="number" min="0" step="0.25" /></label>
               <label><span>{{ t('environment') }}</span><input v-model.trim="sessionForm.market_environment" :placeholder="t('volatileTrend')" /></label>
               <label class="wide"><span>{{ t('allowedSetups') }}</span><input v-model.trim="sessionForm.allowed_setups_text" :placeholder="t('setupExamples')" /></label>
               <label class="wide"><span>{{ t('noTradeConditions') }}</span><input v-model.trim="sessionForm.no_trade_conditions" :placeholder="t('noTradePlaceholder')" /></label>
-              <button :disabled="saving">{{ t('createSession') }}</button>
+              <button :disabled="saving">{{ t('createContext') }}</button>
             </form>
 
-            <div v-if="!sessions.length" class="card empty-row">{{ t('noSessions') }}</div>
-            <article v-for="session in sessions" :key="session.id" :class="['card', 'session-card', { selected: selectedSessionId === session.id }]" @click="selectedSessionId = session.id">
+            <div v-if="!contexts.length" class="card empty-row">{{ t('noContexts') }}</div>
+            <article v-for="session in contexts" :key="session.id" :class="['card', 'session-card', { selected: selectedSessionId === session.id }]" @click="selectedSessionId = session.id">
               <div class="card-title-row">
-                <div><strong>{{ session.name }}</strong><div class="muted-copy">{{ enumLabel(session.session_type) }} · {{ session.market_environment || t('environmentNotSet') }}</div></div>
+                <div><strong>{{ session.name }}</strong><div class="muted-copy">{{ enumLabel(session.context_kind) }} · {{ enumLabel(session.context_type) }} · {{ session.market_environment || t('environmentNotSet') }}</div></div>
                 <span :class="['badge', statusClass(session.status)]">{{ enumLabel(session.status) }}</span>
               </div>
               <div class="session-metrics"><span>{{ session.campaign_count }} {{ t('campaignsLower') }}</span><span>{{ number(session.result_r) }}R</span><span>{{ t('limit') }} {{ session.risk_limit_r || '-' }}R</span></div>
@@ -90,16 +91,16 @@
           <section class="journal-main-column">
             <div class="column-heading">
               <div><div class="section-title">{{ t('activeDecisions') }}</div><span class="muted-copy">{{ t('decisionsHelp') }}</span></div>
-              <button v-if="sessions.length" @click="openCampaignForm(selectedSessionId || sessions[0].id)">{{ t('createCampaign') }}</button>
+              <button v-if="contexts.length" @click="openCampaignForm(selectedSessionId || contexts[0].id)">{{ t('createCampaign') }}</button>
             </div>
 
             <form v-if="showCampaignForm" class="card campaign-builder" @submit.prevent="createCampaign(false)">
               <div class="builder-head"><div><strong>{{ t('campaignSnapshot') }}</strong><span>{{ t('snapshotImmutableHelp') }}</span></div><button type="button" class="secondary small-btn" @click="showCampaignForm = false">{{ t('close') }}</button></div>
               <div class="journal-form-grid four-col">
-                <label><span>{{ t('session') }}</span><select v-model="campaignForm.session" required><option v-for="item in sessions" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+                <label><span>{{ t('decisionContext') }}</span><select v-model="campaignForm.context" required @change="syncHorizonToContext"><option v-for="item in contexts" :key="item.id" :value="item.id">{{ item.name }} · {{ enumLabel(item.context_type) }}</option></select></label>
                 <label><span>{{ t('symbol') }}</span><input v-model.trim="campaignForm.symbol" required placeholder="MES" /></label>
                 <label><span>{{ t('direction') }}</span><select v-model="campaignForm.direction"><option value="long">{{ enumLabel('long') }}</option><option value="short">{{ enumLabel('short') }}</option><option value="neutral">{{ enumLabel('neutral') }}</option></select></label>
-                <label><span>{{ t('horizon') }}</span><select v-model="campaignForm.horizon"><option v-for="item in horizons" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+                <label><span>{{ t('horizon') }}</span><select v-model="campaignForm.horizon"><option v-for="item in availableHorizons" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
                 <label><span>{{ t('setup') }}</span><input v-model.trim="campaignForm.setup" required :placeholder="t('openingBreakout')" /></label>
                 <label><span>{{ t('riskAmount') }}</span><input v-model.number="campaignForm.planned_risk_amount" required type="number" min="0.01" step="1" /></label>
                 <label><span>{{ t('maxRiskR') }}</span><input v-model.number="campaignForm.max_risk_r" required type="number" min="0.1" step="0.25" /></label>
@@ -136,7 +137,7 @@
             <div v-if="!todayCampaigns.length" class="card empty-row">{{ t('createDecisionFirst') }}</div>
             <article v-for="campaign in todayCampaigns" :key="campaign.id" class="card campaign-card">
               <div class="campaign-card-top">
-                <div><strong>{{ campaign.symbol }} · {{ campaign.setup }}</strong><div class="muted-copy">{{ enumLabel(campaign.direction) }} · {{ enumLabel(campaign.horizon) }} · {{ campaign.session_name }}</div></div>
+                <div><strong>{{ campaign.symbol }} · {{ campaign.setup }}</strong><div class="muted-copy">{{ enumLabel(campaign.direction) }} · {{ enumLabel(campaign.horizon) }} · {{ campaign.context_name }} · {{ enumLabel(campaign.context_type) }}</div></div>
                 <span :class="['badge', statusClass(campaign.status)]">{{ enumLabel(campaign.status) }}</span>
               </div>
               <div class="campaign-stats">
@@ -153,6 +154,7 @@
               </div>
               <div class="row-actions">
                 <button v-if="campaign.status === 'planned' && campaign.decision_snapshot" class="secondary small-btn" @click="activateCampaign(campaign)">{{ t('activate') }}</button>
+                <button v-if="campaign.context_kind === 'swing' && ['active', 'paused'].includes(campaign.status)" class="secondary small-btn" @click="openDecisionUpdate(campaign)">{{ t('decisionUpdate') }}</button>
                 <button v-if="['active', 'paused'].includes(campaign.status) && campaign.attempts.length" class="secondary small-btn" @click="closeCampaign(campaign)">{{ t('closeCampaign') }}</button>
                 <button v-if="['review_pending', 'closed'].includes(campaign.status)" class="small-btn" @click="openReview(campaign)">{{ t('review') }}</button>
               </div>
@@ -161,6 +163,27 @@
                   <strong>#{{ attempt.sequence_no }}</strong><span>{{ enumLabel(attempt.status) }}</span><span>{{ attempt.fills.length }} {{ t('fillsLower') }}</span><span :class="numberClass(attempt.result_r)">{{ number(attempt.result_r) }}R</span>
                 </div>
               </div>
+              <div v-if="campaign.decision_updates?.length" class="decision-update-list">
+                <div v-for="update in campaign.decision_updates" :key="update.id" class="decision-update-row">
+                  <span>{{ shortDateTime(update.event_at) }}</span><strong>{{ enumLabel(update.position_stage) }}</strong><span>{{ enumLabel(update.event_type) }} · {{ update.decision }}</span>
+                </div>
+              </div>
+              <form v-if="decisionUpdateCampaign?.id === campaign.id" class="decision-update-form" @submit.prevent="submitDecisionUpdate">
+                <div class="journal-form-grid three-col">
+                  <label><span>{{ t('positionStage') }}</span><select v-model="decisionUpdateForm.position_stage"><option v-for="item in positionStages" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+                  <label><span>{{ t('eventType') }}</span><select v-model="decisionUpdateForm.event_type"><option v-for="item in eventTypes" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+                  <label><span>{{ t('eventTime') }}</span><input v-model="decisionUpdateForm.event_at" type="datetime-local" required /></label>
+                </div>
+                <div class="journal-form-grid two-col">
+                  <label><span>{{ t('observedEvidence') }}</span><input v-model.trim="decisionUpdateForm.observed_evidence_text" required :placeholder="t('evidencePlaceholder')" /></label>
+                  <label><span>{{ t('interpretation') }}</span><input v-model.trim="decisionUpdateForm.interpretation" required /></label>
+                  <label><span>{{ t('updatedDecision') }}</span><input v-model.trim="decisionUpdateForm.decision" required :placeholder="t('updatedDecisionPlaceholder')" /></label>
+                  <label><span>{{ t('riskChange') }}</span><input v-model.trim="decisionUpdateForm.risk_change" :placeholder="t('riskChangePlaceholder')" /></label>
+                  <label><span>{{ t('invalidationUpdate') }}</span><input v-model.trim="decisionUpdateForm.invalidation_update" /></label>
+                  <label><span>{{ t('nextReview') }}</span><input v-model="decisionUpdateForm.next_review_at" type="datetime-local" /></label>
+                </div>
+                <div class="builder-actions"><button type="button" class="secondary" @click="decisionUpdateCampaign = null">{{ t('cancel') }}</button><button :disabled="saving">{{ t('saveDecisionUpdate') }}</button></div>
+              </form>
             </article>
           </section>
         </div>
@@ -227,7 +250,7 @@
       <div class="card decisions-toolbar"><span>{{ campaignHistory.length }} {{ t('campaignsLower') }}</span><select v-model="decisionStatusFilter"><option value="">{{ t('allStatuses') }}</option><option v-for="item in campaignStatuses" :key="item" :value="item">{{ enumLabel(item) }}</option></select></div>
       <div class="decision-history-grid">
         <article v-for="campaign in filteredCampaignHistory" :key="campaign.id" class="card history-card">
-          <div class="campaign-card-top"><div><strong>{{ campaign.symbol }} · {{ campaign.setup }}</strong><div class="muted-copy">{{ campaign.trade_date }} · {{ campaign.session_name }}</div></div><span :class="['badge', statusClass(campaign.status)]">{{ enumLabel(campaign.status) }}</span></div>
+          <div class="campaign-card-top"><div><strong>{{ campaign.symbol }} · {{ campaign.setup }}</strong><div class="muted-copy">{{ campaign.trade_date || t('multiDay') }} · {{ campaign.context_name }} · {{ enumLabel(campaign.context_type) }}</div></div><span :class="['badge', statusClass(campaign.status)]">{{ enumLabel(campaign.status) }}</span></div>
           <div class="campaign-stats"><span><small>{{ t('direction') }}</small><strong>{{ enumLabel(campaign.direction) }}</strong></span><span><small>{{ t('horizon') }}</small><strong>{{ enumLabel(campaign.horizon) }}</strong></span><span><small>{{ t('result') }}</small><strong>{{ number(campaign.result_r) }}R</strong></span><span><small>{{ t('decision') }}</small><strong>{{ campaign.review?.decision_grade || '-' }}</strong></span></div>
           <details v-if="campaign.decision_snapshot"><summary>{{ t('originalSnapshot') }}</summary><div class="snapshot-detail"><p><b>{{ t('interpretation') }}:</b> {{ campaign.decision_snapshot.interpretation }}</p><p><b>{{ t('counterCase') }}:</b> {{ campaign.decision_snapshot.strongest_counter_case }}</p><p><b>{{ t('trigger') }}:</b> {{ campaign.decision_snapshot.entry_trigger }}</p><p><b>{{ t('invalidation') }}:</b> {{ campaign.decision_snapshot.invalidation }}</p></div></details>
         </article>
@@ -240,7 +263,7 @@
         <div class="journal-risk-strip analytics-summary"><div class="card risk-cell"><span>{{ t('sampleSize') }}</span><strong>{{ analytics.sample_size }}</strong></div><div class="card risk-cell"><span>{{ t('plannedAvgR') }}</span><strong>{{ number(analytics.plan_comparison.planned.average_r) }}R</strong></div><div class="card risk-cell"><span>{{ t('unplannedAvgR') }}</span><strong>{{ number(analytics.plan_comparison.unplanned.average_r) }}R</strong></div></div>
         <div class="analytics-grid">
           <div class="card"><div class="section-title">{{ t('setupEdge') }}</div><table class="trade-table"><thead><tr><th>{{ t('setup') }}</th><th>N</th><th>{{ t('avgR') }}</th><th>{{ t('totalR') }}</th></tr></thead><tbody><tr v-for="row in analytics.setup" :key="row.setup"><td>{{ row.setup }}</td><td>{{ row.campaigns }}</td><td>{{ number(row.average_r) }}</td><td>{{ number(row.total_r) }}</td></tr></tbody></table></div>
-          <div class="card"><div class="section-title">{{ t('sessionPerformance') }}</div><table class="trade-table"><thead><tr><th>{{ t('session') }}</th><th>N</th><th>{{ t('avgR') }}</th><th>{{ t('totalR') }}</th></tr></thead><tbody><tr v-for="row in analytics.session" :key="row.session__session_type"><td>{{ enumLabel(row.session__session_type) }}</td><td>{{ row.campaigns }}</td><td>{{ number(row.average_r) }}</td><td>{{ number(row.total_r) }}</td></tr></tbody></table></div>
+          <div class="card"><div class="section-title">{{ t('contextPerformance') }}</div><table class="trade-table"><thead><tr><th>{{ t('decisionContext') }}</th><th>N</th><th>{{ t('avgR') }}</th><th>{{ t('totalR') }}</th></tr></thead><tbody><tr v-for="row in analytics.context" :key="`${row.context__context_kind}-${row.context__context_type}`"><td>{{ enumLabel(row.context__context_kind) }} · {{ enumLabel(row.context__context_type) }}</td><td>{{ row.campaigns }}</td><td>{{ number(row.average_r) }}</td><td>{{ number(row.total_r) }}</td></tr></tbody></table></div>
           <div class="card"><div class="section-title">{{ t('attemptSequence') }}</div><table class="trade-table"><thead><tr><th>{{ t('attempt') }}</th><th>N</th><th>{{ t('avgR') }}</th><th>{{ t('totalR') }}</th></tr></thead><tbody><tr v-for="row in analytics.attempt_sequence" :key="row.sequence_no"><td>#{{ row.sequence_no }}</td><td>{{ row.attempts }}</td><td>{{ number(row.average_r) }}</td><td>{{ number(row.total_r) }}</td></tr></tbody></table></div>
         </div>
         <div v-if="analytics.sample_size < 20" class="card sample-warning">{{ t('sampleWarning') }}</div>
@@ -252,10 +275,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
-  activateJournalCampaign, attachJournalFills, closeJournalCampaign, closeJournalSession,
-  createDecisionSnapshot, createJournalCampaign, createJournalSession, createJournalToday,
-  fetchJournalAnalytics, fetchJournalCampaigns, fetchJournalToday, reviewJournalCampaign,
-  importJournalFills, startJournalSession, undoJournalGrouping,
+  activateJournalCampaign, attachJournalFills, closeJournalCampaign, closeJournalContext,
+  createDecisionSnapshot, createDecisionUpdate, createJournalCampaign, createJournalContext, createJournalToday,
+  fetchJournalAnalytics, fetchJournalCampaigns, fetchJournalContexts, fetchJournalToday, reviewJournalCampaign,
+  importJournalFills, startJournalContext, undoJournalGrouping,
 } from '../api/journal'
 import { responseRows } from '../api/pagination'
 import { formatNumber } from '../utils/formatters'
@@ -267,6 +290,10 @@ const messages = {
     startDay: 'Start the trading day', startDayHelp: 'Set the guardrails before creating sessions and trade decisions.', dailyRiskLimit: 'Daily risk limit', maximumCampaigns: 'Maximum decisions',
     marketEnvironment: 'Market environment', marketEnvironmentPlaceholder: 'Trend, range, volatile…', createTradingDay: 'Create trading day', dayStatus: 'Day status', netPnl: 'Net P&L', totalR: 'Total R',
     campaigns: 'Decisions', attempts: 'Attempts', riskBudget: 'Risk budget', notSet: 'Not set', sessions: 'Sessions', sessionsHelp: 'Divide the day into distinct decision environments.',
+    decisionContexts: 'Decision contexts', decisionContextsHelp: 'Time segments for intraday trades; position stages for swing trades.', newContext: 'New context', createContext: 'Create context', noContexts: 'No decision contexts yet.',
+    contextKind: 'Context kind', intradayContext: 'Intraday · time segment', swingContext: 'Swing · position stage', timeSegment: 'Time segment', positionStage: 'Position stage', decisionContext: 'Decision context',
+    decisionUpdate: 'Decision update', eventType: 'Event type', eventTime: 'Event time', updatedDecision: 'Updated decision', updatedDecisionPlaceholder: 'Hold, add, reduce, exit…', riskChange: 'Risk change',
+    riskChangePlaceholder: 'How does exposure or risk change?', invalidationUpdate: 'Invalidation update', nextReview: 'Next review', saveDecisionUpdate: 'Save decision update', multiDay: 'Multi-day', contextPerformance: 'Context performance',
     cancel: 'Cancel', newSession: 'New session', name: 'Name', openingSession: 'Opening session', type: 'Type', riskLimitR: 'Risk limit (R)', environment: 'Environment', volatileTrend: 'Volatile trend',
     allowedSetups: 'Allowed setups', setupExamples: 'Opening breakout, pullback', noTradeConditions: 'No-trade conditions', noTradePlaceholder: 'When should you stay out?', createSession: 'Create session',
     noSessions: 'No sessions yet.', environmentNotSet: 'Environment not set', campaignsLower: 'decisions', limit: 'Limit', start: 'Start', close: 'Close', newDecision: 'New decision',
@@ -297,7 +324,10 @@ const messages = {
     todayTab: '今日', decisionsTab: '决策记录', analyticsTab: '统计分析', tradingDay: '交易日', actionFailed: '操作失败', dismiss: '关闭提示', loadingJournal: '正在加载交易日志…',
     startDay: '开始交易日', startDayHelp: '先设置风险边界，再创建交易时段与交易决策。', dailyRiskLimit: '单日风险上限', maximumCampaigns: '最多决策数', marketEnvironment: '市场环境',
     marketEnvironmentPlaceholder: '趋势、震荡、高波动…', createTradingDay: '创建交易日', dayStatus: '当日状态', netPnl: '净盈亏', totalR: '总 R', campaigns: '决策数', attempts: '尝试次数', riskBudget: '风险预算', notSet: '未设置',
-    sessions: '交易时段', sessionsHelp: '把一天划分为不同的决策环境。', cancel: '取消', newSession: '新建时段', name: '名称', openingSession: '开盘时段', type: '类型', riskLimitR: '风险上限（R）',
+    sessions: '交易时段', sessionsHelp: '把一天划分为不同的决策环境。', decisionContexts: '决策上下文', decisionContextsHelp: '日内交易使用时间段，波段交易使用持仓阶段。', newContext: '新建上下文', createContext: '创建决策上下文', noContexts: '还没有决策上下文。',
+    contextKind: '上下文类型', intradayContext: '日内 · 时间段', swingContext: '波段 · 持仓阶段', timeSegment: '时间段', positionStage: '持仓阶段', decisionContext: '决策上下文', decisionUpdate: '更新决策', eventType: '事件类型', eventTime: '事件时间',
+    updatedDecision: '更新后的决策', updatedDecisionPlaceholder: '继续持有、加仓、减仓、退出…', riskChange: '风险变化', riskChangePlaceholder: '仓位或风险如何变化？', invalidationUpdate: '失效条件更新', nextReview: '下次复查', saveDecisionUpdate: '保存决策更新', multiDay: '跨日', contextPerformance: '决策上下文表现',
+    cancel: '取消', newSession: '新建时段', name: '名称', openingSession: '开盘时段', type: '类型', riskLimitR: '风险上限（R）',
     environment: '环境', volatileTrend: '高波动趋势', allowedSetups: '允许的策略', setupExamples: '开盘突破、回调入场', noTradeConditions: '禁止交易条件', noTradePlaceholder: '什么情况下必须观望？',
     createSession: '创建时段', noSessions: '还没有交易时段。', environmentNotSet: '未设置市场环境', campaignsLower: '个决策', limit: '上限', start: '开始', close: '结束', newDecision: '新建决策',
     activeDecisions: '当前决策', decisionsHelp: '一个交易决策可以包含多次执行尝试。', createCampaign: '创建决策', campaignSnapshot: '交易前决策快照', snapshotImmutableHelp: '保存后快照不可修改，只能在交易后复盘。',
@@ -322,12 +352,14 @@ const enumMessages = {
   en: {
     draft: 'Draft', active: 'Active', planned: 'Planned', paused: 'Paused', closed: 'Closed', review_pending: 'Review pending', reviewed: 'Reviewed', cancelled: 'Cancelled', open: 'Open', scaling: 'Scaling', pending: 'Pending', voided: 'Voided',
     premarket: 'Pre-market', opening: 'Opening', morning: 'Morning', midday: 'Midday', power_hour: 'Power hour', custom: 'Custom', long: 'Long', short: 'Short', neutral: 'Neutral', scalp: 'Scalp', intraday: 'Intraday', swing: 'Swing', position: 'Position',
+    idea_validation: 'Idea validation', initial_entry: 'Initial entry', position_building: 'Position building', holding: 'Holding', risk_reduction: 'Risk reduction', exit: 'Exit', price_action: 'Price action', economic_data: 'Economic data', news: 'News', earnings: 'Earnings', risk_event: 'Risk event', time_review: 'Scheduled review',
     planned_retry: 'Planned retry', new_signal: 'New signal', better_price: 'Better price', noise_stop: 'Noise stop', changed_setup: 'Changed setup', emotional: 'Emotional', target: 'Target', trailing_stop: 'Trailing stop', initial_stop: 'Initial stop',
     thesis_invalidated: 'Thesis invalidated', time_stop: 'Time stop', market_change: 'Market change', manual_risk: 'Manual risk exit', error: 'Error', yes: 'Yes', partly: 'Partly', no: 'No', BUY: 'Buy', SELL: 'Sell', buy: 'Buy', sell: 'Sell',
   },
   zh: {
     draft: '草稿', active: '进行中', planned: '已计划', paused: '已暂停', closed: '已结束', review_pending: '待复盘', reviewed: '已复盘', cancelled: '已取消', open: '持有中', scaling: '调整仓位中', pending: '待处理', voided: '已作废',
     premarket: '盘前', opening: '开盘', morning: '上午', midday: '午间', power_hour: '尾盘时段', custom: '自定义', long: '做多', short: '做空', neutral: '中性', scalp: '超短线', intraday: '日内', swing: '波段', position: '中长线',
+    idea_validation: '想法验证', initial_entry: '首次建仓', position_building: '逐步建仓', holding: '持有观察', risk_reduction: '降低风险', exit: '退出', price_action: '价格行为', economic_data: '经济数据', news: '新闻', earnings: '财报', risk_event: '风险事件', time_review: '定期复查',
     planned_retry: '计划内重试', new_signal: '出现新信号', better_price: '更优价格', noise_stop: '噪声止损', changed_setup: '策略条件改变', emotional: '情绪驱动', target: '达到目标', trailing_stop: '移动止损', initial_stop: '初始止损',
     thesis_invalidated: '交易逻辑失效', time_stop: '时间止损', market_change: '市场环境变化', manual_risk: '主动风险退出', error: '操作错误', yes: '是', partly: '部分遵守', no: '否', BUY: '买入', SELL: '卖出', buy: '买入', sell: '卖出',
   },
@@ -355,7 +387,8 @@ function enumLabel(value) {
 
 const tabs = [{ id: 'today', labelKey: 'todayTab' }, { id: 'decisions', labelKey: 'decisionsTab' }, { id: 'analytics', labelKey: 'analyticsTab' }]
 const sessionTypes = ['premarket', 'opening', 'morning', 'midday', 'power_hour', 'custom']
-const horizons = ['scalp', 'intraday', 'swing', 'position']
+const positionStages = ['idea_validation', 'initial_entry', 'position_building', 'holding', 'risk_reduction', 'exit']
+const eventTypes = ['price_action', 'economic_data', 'news', 'earnings', 'risk_event', 'time_review', 'custom']
 const reentryReasons = ['planned_retry', 'new_signal', 'better_price', 'noise_stop', 'changed_setup', 'emotional']
 const exitReasons = ['target', 'trailing_stop', 'initial_stop', 'thesis_invalidated', 'time_stop', 'market_change', 'manual_risk', 'emotional', 'error']
 const grades = ['A', 'B', 'C', 'D']
@@ -366,6 +399,11 @@ function localToday() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
+function localDateTime() {
+  const now = new Date()
+  const offset = now.getTimezoneOffset() * 60000
+  return new Date(now.getTime() - offset).toISOString().slice(0, 16)
+}
 
 const activeTab = ref('today')
 const selectedDate = ref(localToday())
@@ -373,6 +411,7 @@ const loading = ref(true)
 const saving = ref(false)
 const errorMessage = ref('')
 const tradingDay = ref(null)
+const swingContexts = ref([])
 const ungroupedFills = ref([])
 const campaignHistory = ref([])
 const analytics = ref(null)
@@ -383,12 +422,13 @@ const selectedFillIds = ref([])
 const groupingCampaignId = ref('')
 const groupingAttemptId = ref('')
 const reviewCampaign = ref(null)
+const decisionUpdateCampaign = ref(null)
 const decisionStatusFilter = ref('')
 
 const dayForm = reactive({ daily_risk_limit: null, max_trades: null, market_environment: '' })
-const sessionForm = reactive({ name: '', session_type: 'opening', risk_limit_r: 2, market_environment: '', allowed_setups_text: '', no_trade_conditions: '' })
+const sessionForm = reactive({ name: '', context_kind: 'intraday', context_type: 'opening', risk_limit_r: 2, market_environment: '', allowed_setups_text: '', no_trade_conditions: '' })
 const campaignForm = reactive({
-  session: '', symbol: '', direction: 'long', horizon: 'intraday', setup: '', planned_risk_amount: 100,
+  context: '', symbol: '', direction: 'long', horizon: 'intraday', setup: '', planned_risk_amount: 100,
   max_risk_r: 1, max_attempts: 2, observed_evidence_text: '', interpretation: '', strongest_counter_case: '',
   chosen_action: '', entry_trigger: '', invalidation: '', time_stop: '', scenarios: [blankScenario(t('baseCase'), 60), blankScenario(t('failureCase'), 40)],
 })
@@ -398,15 +438,22 @@ const reviewForm = reactive({
   decision_grade: 'B', execution_grade: 'B', outcome_drivers_text: '', hindsight_known_then: '', hindsight_luck: '',
   hindsight_process: '', would_repeat: true, lesson: '',
 })
+const decisionUpdateForm = reactive({
+  position_stage: 'holding', event_type: 'price_action', event_at: localDateTime(), observed_evidence_text: '',
+  interpretation: '', decision: '', risk_change: '', invalidation_update: '', next_review_at: '',
+})
 
 function blankScenario(name = '', probability = 0) { return { name, probability, confirmation: '', contradiction: '', planned_action: '' } }
-const sessions = computed(() => tradingDay.value?.sessions || [])
-const todayCampaigns = computed(() => sessions.value.flatMap((item) => item.campaigns || []))
+const intradayContexts = computed(() => tradingDay.value?.contexts || [])
+const contexts = computed(() => [...intradayContexts.value, ...swingContexts.value])
+const todayCampaigns = computed(() => contexts.value.flatMap((item) => item.campaigns || []))
 const reviewQueue = computed(() => todayCampaigns.value.filter((item) => ['review_pending', 'closed'].includes(item.status)))
 const probabilityTotal = computed(() => campaignForm.scenarios.reduce((sum, item) => sum + Number(item.probability || 0), 0))
 const probabilityValid = computed(() => probabilityTotal.value >= 99 && probabilityTotal.value <= 101)
 const groupingCampaign = computed(() => todayCampaigns.value.find((item) => item.id === groupingCampaignId.value))
 const groupingAttempts = computed(() => groupingCampaign.value?.attempts || [])
+const selectedCampaignContext = computed(() => contexts.value.find((item) => item.id === campaignForm.context))
+const availableHorizons = computed(() => selectedCampaignContext.value?.context_kind === 'swing' ? ['swing', 'position'] : ['scalp', 'intraday'])
 const allDayFills = computed(() => {
   const rows = ungroupedFills.value.map((fill) => ({ ...fill, location: t('ungrouped') }))
   for (const campaign of todayCampaigns.value) {
@@ -424,6 +471,7 @@ function money(value) {
   return new Intl.NumberFormat(language.value === 'zh' ? 'zh-CN' : 'en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Number(value))
 }
 function shortTime(value) { return value ? new Date(value).toLocaleTimeString(language.value === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-' }
+function shortDateTime(value) { return value ? new Date(value).toLocaleString(language.value === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-' }
 function numberClass(value) { return Number(value || 0) > 0 ? 'positive-value' : Number(value || 0) < 0 ? 'negative-value' : '' }
 function statusClass(value) { return ['active', 'open'].includes(value) ? 'running' : ['reviewed', 'closed'].includes(value) ? 'success' : ['cancelled', 'voided'].includes(value) ? 'failed' : 'partial' }
 function readError(err) {
@@ -444,7 +492,9 @@ async function loadToday() {
     const res = await fetchJournalToday(selectedDate.value)
     tradingDay.value = res.data.trading_day
     ungroupedFills.value = res.data.ungrouped_fills || []
-    if (sessions.value.length && !sessions.value.some((item) => item.id === selectedSessionId.value)) selectedSessionId.value = sessions.value[0].id
+    const swingRes = await fetchJournalContexts({ context_kind: 'swing' })
+    swingContexts.value = responseRows(swingRes.data).filter((item) => !['closed', 'reviewed'].includes(item.status))
+    if (contexts.value.length && !contexts.value.some((item) => item.id === selectedSessionId.value)) selectedSessionId.value = contexts.value[0].id
   } catch (err) { errorMessage.value = readError(err) } finally { loading.value = false }
 }
 async function loadHistory() { const res = await fetchJournalCampaigns(); campaignHistory.value = responseRows(res.data) }
@@ -454,24 +504,27 @@ async function selectTab(tab) { activeTab.value = tab; if (tab === 'decisions') 
 async function createDay() { await runAction(async () => { await createJournalToday({ trade_date: selectedDate.value, ...dayForm }); await loadToday() }) }
 async function createSession() {
   await runAction(async () => {
-    await createJournalSession({
-      trading_day: tradingDay.value.id, name: sessionForm.name, session_type: sessionForm.session_type,
+    await createJournalContext({
+      trading_day: sessionForm.context_kind === 'intraday' ? tradingDay.value.id : null,
+      name: sessionForm.name, context_kind: sessionForm.context_kind, context_type: sessionForm.context_type,
       risk_limit_r: sessionForm.risk_limit_r || null, market_environment: sessionForm.market_environment,
       allowed_setups: sessionForm.allowed_setups_text.split(',').map((v) => v.trim()).filter(Boolean),
       no_trade_conditions: sessionForm.no_trade_conditions,
     })
-    Object.assign(sessionForm, { name: '', session_type: 'opening', risk_limit_r: 2, market_environment: '', allowed_setups_text: '', no_trade_conditions: '' })
+    Object.assign(sessionForm, { name: '', context_kind: 'intraday', context_type: 'opening', risk_limit_r: 2, market_environment: '', allowed_setups_text: '', no_trade_conditions: '' })
     showSessionForm.value = false; await loadToday()
   })
 }
-async function startSession(item) { await runAction(async () => { await startJournalSession(item.id); await loadToday() }) }
-async function closeSession(item) { await runAction(async () => { await closeJournalSession(item.id); await loadToday() }) }
-function openCampaignForm(sessionId) { campaignForm.session = sessionId; showCampaignForm.value = true; window.scrollTo({ top: 350, behavior: 'smooth' }) }
+async function startSession(item) { await runAction(async () => { await startJournalContext(item.id); await loadToday() }) }
+async function closeSession(item) { await runAction(async () => { await closeJournalContext(item.id); await loadToday() }) }
+function openCampaignForm(contextId) { campaignForm.context = contextId; syncHorizonToContext(); showCampaignForm.value = true; window.scrollTo({ top: 350, behavior: 'smooth' }) }
+function syncContextType() { sessionForm.context_type = sessionForm.context_kind === 'swing' ? 'idea_validation' : 'opening' }
+function syncHorizonToContext() { campaignForm.horizon = selectedCampaignContext.value?.context_kind === 'swing' ? 'swing' : 'intraday' }
 function addScenario() { if (campaignForm.scenarios.length < 3) campaignForm.scenarios.push(blankScenario(t('alternativeCase'), 0)) }
 function removeScenario(index) { campaignForm.scenarios.splice(index, 1) }
 function resetCampaignForm() {
   Object.assign(campaignForm, {
-    session: selectedSessionId.value || sessions.value[0]?.id || '', symbol: '', direction: 'long', horizon: 'intraday', setup: '',
+    context: selectedSessionId.value || contexts.value[0]?.id || '', symbol: '', direction: 'long', horizon: 'intraday', setup: '',
     planned_risk_amount: 100, max_risk_r: 1, max_attempts: 2, observed_evidence_text: '', interpretation: '',
     strongest_counter_case: '', chosen_action: '', entry_trigger: '', invalidation: '', time_stop: '',
     scenarios: [blankScenario(t('baseCase'), 60), blankScenario(t('failureCase'), 40)],
@@ -480,7 +533,7 @@ function resetCampaignForm() {
 async function createCampaign(activate) {
   await runAction(async () => {
     const res = await createJournalCampaign({
-      session: campaignForm.session, symbol: campaignForm.symbol, direction: campaignForm.direction, setup: campaignForm.setup,
+      context: campaignForm.context, symbol: campaignForm.symbol, direction: campaignForm.direction, setup: campaignForm.setup,
       horizon: campaignForm.horizon, max_risk_r: campaignForm.max_risk_r, planned_risk_amount: campaignForm.planned_risk_amount,
       max_attempts: campaignForm.max_attempts,
     })
@@ -517,6 +570,30 @@ async function undoGrouping() {
   await runAction(async () => { await undoJournalGrouping(groupingCampaignId.value); await loadToday() })
 }
 function openReview(campaign) { reviewCampaign.value = campaign; reviewForm.actual_scenario = campaign.decision_snapshot?.scenarios?.[0]?.id || ''; setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 0) }
+function openDecisionUpdate(campaign) {
+  decisionUpdateCampaign.value = campaign
+  Object.assign(decisionUpdateForm, {
+    position_stage: campaign.context_type || 'holding', event_type: 'price_action', event_at: localDateTime(),
+    observed_evidence_text: '', interpretation: '', decision: '', risk_change: '', invalidation_update: '', next_review_at: '',
+  })
+}
+async function submitDecisionUpdate() {
+  await runAction(async () => {
+    await createDecisionUpdate(decisionUpdateCampaign.value.id, {
+      position_stage: decisionUpdateForm.position_stage,
+      event_type: decisionUpdateForm.event_type,
+      event_at: new Date(decisionUpdateForm.event_at).toISOString(),
+      observed_evidence: decisionUpdateForm.observed_evidence_text.split(',').map((value) => value.trim()).filter(Boolean),
+      interpretation: decisionUpdateForm.interpretation,
+      decision: decisionUpdateForm.decision,
+      risk_change: decisionUpdateForm.risk_change,
+      invalidation_update: decisionUpdateForm.invalidation_update,
+      next_review_at: decisionUpdateForm.next_review_at ? new Date(decisionUpdateForm.next_review_at).toISOString() : null,
+    })
+    decisionUpdateCampaign.value = null
+    await loadToday()
+  })
+}
 async function submitReview() {
   await runAction(async () => {
     await reviewJournalCampaign(reviewCampaign.value.id, {
@@ -595,6 +672,11 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .snapshot-summary code { justify-self: end; color: var(--tv-muted); font-size: 10px; }
 .attempt-list { display: grid; border-top: 1px solid var(--line); }
 .attempt-row { display: grid; grid-template-columns: 40px repeat(3, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid #edf1f7; font-size: 12px; }
+.decision-update-list { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.decision-update-row { display: grid; grid-template-columns: 120px 120px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px 10px; border-radius: 9px; background: #f7f9fd; font-size: 12px; }
+.decision-update-row > span:first-child { color: var(--tv-muted); }
+.decision-update-form { display: grid; gap: 12px; padding: 13px; border: 1px solid #b8c8e8; border-radius: 11px; background: #f8faff; }
+.decision-update-form label { display: grid; gap: 5px; }
 .grouping-workspace { display: grid; gap: 14px; }
 .csv-import-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 12px; border: 1px dashed #b8c8e8; border-radius: 11px; background: #f8faff; }
 .csv-import-row > div { display: grid; gap: 3px; }

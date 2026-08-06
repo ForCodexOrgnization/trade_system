@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from apps.common.models import BrokerAccount
 from apps.trades.models import RawIBKRExecution, TradeFill
 
-from .models import Campaign, DecisionSnapshot, Session, TradingDay
+from .models import Campaign, DecisionContext, DecisionSnapshot, TradingDay
 
 
 class JournalMVPTests(TestCase):
@@ -16,9 +16,12 @@ class JournalMVPTests(TestCase):
         self.client = APIClient()
         self.account = BrokerAccount.objects.create(account_code="DU-JOURNAL", display_name="Journal Account")
         self.day = TradingDay.objects.create(account=self.account, trade_date="2026-08-06")
-        self.session = Session.objects.create(trading_day=self.day, name="Opening", session_type="opening")
+        self.context = DecisionContext.objects.create(
+            account=self.account, trading_day=self.day, name="Opening", context_kind="intraday", context_type="opening"
+        )
         self.campaign = Campaign.objects.create(
-            session=self.session,
+            account=self.account,
+            context=self.context,
             symbol="MESU6",
             direction="long",
             setup="Opening Breakout",
@@ -187,3 +190,58 @@ class JournalMVPTests(TestCase):
         self.assertEqual(first.data, {"imported": 1, "duplicates": 0})
         self.assertEqual(second.data, {"imported": 0, "duplicates": 1})
         self.assertEqual(TradeFill.objects.filter(raw_execution__broker_account=self.account).count(), 1)
+
+    def test_context_kind_enforces_trading_day_boundary(self):
+        intraday = self.client.post(
+            "/api/journal/contexts/?account=DU-JOURNAL",
+            {"name": "Opening", "context_kind": "intraday", "context_type": "opening"},
+            format="json",
+        )
+        swing_with_day = self.client.post(
+            "/api/journal/contexts/?account=DU-JOURNAL",
+            {"name": "MCL lifecycle", "context_kind": "swing", "context_type": "idea_validation", "trading_day": self.day.id},
+            format="json",
+        )
+        self.assertEqual(intraday.status_code, 400)
+        self.assertEqual(swing_with_day.status_code, 400)
+
+    def test_swing_campaign_supports_position_stage_decision_updates(self):
+        context = self.client.post(
+            "/api/journal/contexts/?account=DU-JOURNAL",
+            {"name": "MCL lifecycle", "context_kind": "swing", "context_type": "idea_validation", "risk_limit_r": "2"},
+            format="json",
+        )
+        self.assertEqual(context.status_code, 201)
+        self.assertIsNone(context.data["trading_day"])
+
+        campaign = self.client.post(
+            "/api/journal/campaigns/?account=DU-JOURNAL",
+            {
+                "context": context.data["id"], "symbol": "MCL", "direction": "long", "setup": "Weekly trend",
+                "horizon": "swing", "planned_risk_amount": "200", "max_risk_r": "1", "max_attempts": 3,
+            },
+            format="json",
+        )
+        self.assertEqual(campaign.status_code, 201)
+        snapshot = self.client.post(
+            f"/api/journal/campaigns/{campaign.data['id']}/decision-snapshot/?account=DU-JOURNAL",
+            self.snapshot_payload(),
+            format="json",
+        )
+        self.assertEqual(snapshot.status_code, 201)
+        activated = self.client.post(f"/api/journal/campaigns/{campaign.data['id']}/activate/?account=DU-JOURNAL")
+        self.assertEqual(activated.status_code, 200)
+
+        updated = self.client.post(
+            f"/api/journal/campaigns/{campaign.data['id']}/decision-updates/?account=DU-JOURNAL",
+            {
+                "position_stage": "holding", "event_type": "economic_data", "event_at": "2026-08-07T14:30:00Z",
+                "observed_evidence": ["Inventory data did not break support"],
+                "interpretation": "The weekly thesis remains intact.", "decision": "Hold the current size.",
+                "risk_change": "No change", "invalidation_update": "Daily close below support",
+            },
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 201)
+        self.assertEqual(updated.data["context_type"], "holding")
+        self.assertEqual(updated.data["decision_updates"][0]["decision"], "Hold the current size.")

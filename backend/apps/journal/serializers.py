@@ -7,10 +7,11 @@ from .models import (
     AttemptFill,
     Campaign,
     CampaignReview,
+    DecisionContext,
+    DecisionContextReview,
     DecisionSnapshot,
+    DecisionUpdate,
     Scenario,
-    Session,
-    SessionReview,
     TradingDay,
 )
 
@@ -70,23 +71,37 @@ class CampaignReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "campaign", "created_at", "updated_at"]
 
 
+class DecisionUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DecisionUpdate
+        fields = [
+            "id", "campaign", "position_stage", "event_type", "event_at", "observed_evidence",
+            "interpretation", "decision", "risk_change", "invalidation_update", "next_review_at",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "campaign", "created_at", "updated_at"]
+
+
 class CampaignSerializer(serializers.ModelSerializer):
     decision_snapshot = DecisionSnapshotSerializer(read_only=True)
     attempts = AttemptSerializer(many=True, read_only=True)
     review = CampaignReviewSerializer(read_only=True)
-    session_name = serializers.CharField(source="session.name", read_only=True)
-    trade_date = serializers.DateField(source="session.trading_day.trade_date", read_only=True)
+    decision_updates = DecisionUpdateSerializer(many=True, read_only=True)
+    context_name = serializers.CharField(source="context.name", read_only=True)
+    context_kind = serializers.CharField(source="context.context_kind", read_only=True)
+    context_type = serializers.CharField(source="context.context_type", read_only=True)
+    trade_date = serializers.DateField(source="context.trading_day.trade_date", read_only=True, allow_null=True)
     readiness = serializers.SerializerMethodField()
 
     class Meta:
         model = Campaign
         fields = [
-            "id", "session", "session_name", "trade_date", "symbol", "direction", "setup", "horizon",
+            "id", "context", "context_name", "context_kind", "context_type", "trade_date", "symbol", "direction", "setup", "horizon",
             "status", "max_risk_r", "planned_risk_amount", "max_attempts", "result_r", "realized_pnl",
-            "closed_at", "cancel_reason", "decision_snapshot", "attempts", "review", "readiness",
+            "closed_at", "cancel_reason", "decision_snapshot", "decision_updates", "attempts", "review", "readiness",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "status", "result_r", "realized_pnl", "closed_at", "decision_snapshot", "attempts", "review", "created_at", "updated_at"]
+        read_only_fields = ["id", "status", "result_r", "realized_pnl", "closed_at", "decision_snapshot", "decision_updates", "attempts", "review", "created_at", "updated_at"]
 
     def get_readiness(self, obj):
         snapshot = getattr(obj, "decision_snapshot", None)
@@ -106,31 +121,47 @@ class CampaignSerializer(serializers.ModelSerializer):
         return {"score": score, "ready": not missing, "missing": missing}
 
 
-class SessionReviewSerializer(serializers.ModelSerializer):
+class DecisionContextReviewSerializer(serializers.ModelSerializer):
     class Meta:
-        model = SessionReview
+        model = DecisionContextReview
         fields = "__all__"
-        read_only_fields = ["id", "session", "created_at", "updated_at"]
+        read_only_fields = ["id", "context", "created_at", "updated_at"]
 
 
-class SessionSerializer(serializers.ModelSerializer):
+class DecisionContextSerializer(serializers.ModelSerializer):
     campaigns = CampaignSerializer(many=True, read_only=True)
-    review = SessionReviewSerializer(read_only=True)
+    review = DecisionContextReviewSerializer(read_only=True)
     campaign_count = serializers.IntegerField(source="campaigns.count", read_only=True)
 
     class Meta:
-        model = Session
+        model = DecisionContext
         fields = [
-            "id", "trading_day", "name", "session_type", "start_at", "end_at", "status", "risk_limit_r",
+            "id", "trading_day", "name", "context_kind", "context_type", "start_at", "end_at", "status", "risk_limit_r",
             "result_r", "market_environment", "allowed_setups", "no_trade_conditions", "stop_rule",
             "energy_score", "focus_score", "stress_score", "campaign_count", "campaigns", "review",
             "created_at", "updated_at",
         ]
         read_only_fields = ["id", "status", "result_r", "campaign_count", "campaigns", "review", "created_at", "updated_at"]
 
+    def validate(self, attrs):
+        kind = attrs.get("context_kind", getattr(self.instance, "context_kind", "intraday"))
+        day = attrs.get("trading_day", getattr(self.instance, "trading_day", None))
+        context_type = attrs.get("context_type", getattr(self.instance, "context_type", "custom"))
+        if kind == "intraday" and not day:
+            raise serializers.ValidationError({"trading_day": "Intraday contexts require a trading day."})
+        if kind == "swing" and day:
+            raise serializers.ValidationError({"trading_day": "Swing contexts cannot belong to a trading day."})
+        intraday_types = {"premarket", "opening", "morning", "midday", "power_hour", "custom"}
+        swing_types = {value for value, _ in DecisionContext.POSITION_STAGE_CHOICES}
+        if kind == "intraday" and context_type not in intraday_types:
+            raise serializers.ValidationError({"context_type": "Choose an intraday time segment."})
+        if kind == "swing" and context_type not in swing_types:
+            raise serializers.ValidationError({"context_type": "Choose a swing position stage."})
+        return attrs
+
 
 class TradingDaySerializer(serializers.ModelSerializer):
-    sessions = SessionSerializer(many=True, read_only=True)
+    contexts = DecisionContextSerializer(many=True, read_only=True)
     campaign_count = serializers.SerializerMethodField()
     attempt_count = serializers.SerializerMethodField()
 
@@ -139,12 +170,12 @@ class TradingDaySerializer(serializers.ModelSerializer):
         fields = [
             "id", "account", "trade_date", "status", "timezone", "daily_risk_limit", "max_trades",
             "realized_pnl", "total_r", "market_environment", "closing_note", "campaign_count",
-            "attempt_count", "sessions", "created_at", "updated_at",
+            "attempt_count", "contexts", "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "account", "realized_pnl", "total_r", "campaign_count", "attempt_count", "sessions", "created_at", "updated_at"]
+        read_only_fields = ["id", "account", "realized_pnl", "total_r", "campaign_count", "attempt_count", "contexts", "created_at", "updated_at"]
 
     def get_campaign_count(self, obj):
-        return Campaign.objects.filter(session__trading_day=obj).count()
+        return Campaign.objects.filter(context__trading_day=obj).count()
 
     def get_attempt_count(self, obj):
-        return Attempt.objects.filter(campaign__session__trading_day=obj).count()
+        return Attempt.objects.filter(campaign__context__trading_day=obj).count()

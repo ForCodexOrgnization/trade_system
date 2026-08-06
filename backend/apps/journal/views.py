@@ -24,20 +24,22 @@ from .models import (
     AuditEvent,
     Campaign,
     CampaignReview,
+    DecisionContext,
+    DecisionContextReview,
     DecisionSnapshot,
+    DecisionUpdate,
     Scenario,
-    Session,
-    SessionReview,
     TradingDay,
 )
 from .serializers import (
     AttemptSerializer,
     CampaignReviewSerializer,
     CampaignSerializer,
+    DecisionContextReviewSerializer,
+    DecisionContextSerializer,
     DecisionSnapshotSerializer,
+    DecisionUpdateSerializer,
     FillSummarySerializer,
-    SessionReviewSerializer,
-    SessionSerializer,
     TradingDaySerializer,
 )
 
@@ -50,7 +52,7 @@ def _decimal(value):
 
 
 def _campaign_account(campaign):
-    return campaign.session.trading_day.account
+    return campaign.account
 
 
 def _audit(account, aggregate, event_type, payload=None):
@@ -97,17 +99,18 @@ def _recalculate_campaign(campaign):
     realized_pnl = totals["realized_pnl"] or ZERO
     result_r = totals["result_r"] or ZERO
     Campaign.objects.filter(pk=campaign.pk).update(realized_pnl=realized_pnl, result_r=result_r)
-    session = campaign.session
-    session_total = Campaign.objects.filter(session=session).exclude(status="cancelled").aggregate(value=Sum("result_r"))["value"] or ZERO
-    Session.objects.filter(pk=session.pk).update(result_r=session_total)
-    day = session.trading_day
-    day_totals = Campaign.objects.filter(session__trading_day=day).exclude(status="cancelled").aggregate(
-        pnl=Sum("realized_pnl"), result_r=Sum("result_r")
-    )
-    TradingDay.objects.filter(pk=day.pk).update(
-        realized_pnl=day_totals["pnl"] or ZERO,
-        total_r=day_totals["result_r"] or ZERO,
-    )
+    context = campaign.context
+    context_total = Campaign.objects.filter(context=context).exclude(status="cancelled").aggregate(value=Sum("result_r"))["value"] or ZERO
+    DecisionContext.objects.filter(pk=context.pk).update(result_r=context_total)
+    if context.trading_day_id:
+        day = context.trading_day
+        day_totals = Campaign.objects.filter(context__trading_day=day).exclude(status="cancelled").aggregate(
+            pnl=Sum("realized_pnl"), result_r=Sum("result_r")
+        )
+        TradingDay.objects.filter(pk=day.pk).update(
+            realized_pnl=day_totals["pnl"] or ZERO,
+            total_r=day_totals["result_r"] or ZERO,
+        )
 
 
 class AccountScopedViewSet(viewsets.ModelViewSet):
@@ -120,10 +123,11 @@ class AccountScopedViewSet(viewsets.ModelViewSet):
 class TradingDayViewSet(AccountScopedViewSet):
     serializer_class = TradingDaySerializer
     queryset = TradingDay.objects.select_related("account").prefetch_related(
-        "sessions__campaigns__decision_snapshot__scenarios",
-        "sessions__campaigns__attempts__fill_links__fill",
-        "sessions__campaigns__review",
-        "sessions__review",
+        "contexts__campaigns__decision_snapshot__scenarios",
+        "contexts__campaigns__decision_updates",
+        "contexts__campaigns__attempts__fill_links__fill",
+        "contexts__campaigns__review",
+        "contexts__review",
     )
 
     def get_queryset(self):
@@ -161,78 +165,91 @@ class TradingDayViewSet(AccountScopedViewSet):
         })
 
 
-class SessionViewSet(AccountScopedViewSet):
-    serializer_class = SessionSerializer
-    queryset = Session.objects.select_related("trading_day__account").prefetch_related(
+class DecisionContextViewSet(AccountScopedViewSet):
+    serializer_class = DecisionContextSerializer
+    queryset = DecisionContext.objects.select_related("account", "trading_day").prefetch_related(
         "campaigns__decision_snapshot__scenarios", "campaigns__attempts__fill_links__fill", "campaigns__review"
     )
 
     def get_queryset(self):
-        qs = super().get_queryset().filter(trading_day__account=self.request_account())
+        qs = super().get_queryset().filter(account=self.request_account())
         day_id = self.request.query_params.get("trading_day")
-        return qs.filter(trading_day_id=day_id) if day_id else qs
+        kind = self.request.query_params.get("context_kind")
+        if day_id:
+            qs = qs.filter(trading_day_id=day_id)
+        if kind:
+            qs = qs.filter(context_kind=kind)
+        return qs
 
     def perform_create(self, serializer):
-        day = serializer.validated_data["trading_day"]
-        if day.account_id != self.request_account().id:
+        day = serializer.validated_data.get("trading_day")
+        if day and day.account_id != self.request_account().id:
             raise ValidationError("Trading day belongs to another account.")
-        session = serializer.save()
-        _audit(day.account, session, "SessionCreated")
+        context = serializer.save(account=self.request_account())
+        _audit(self.request_account(), context, "DecisionContextCreated")
 
     @action(detail=True, methods=["post"])
     def start(self, request, pk=None):
-        session = self.get_object()
-        if session.status not in ("planned", "active"):
-            raise ParseError("Only a planned session can be started.")
-        session.status = "active"
-        session.start_at = session.start_at or timezone.now()
-        session.save(update_fields=["status", "start_at", "updated_at"])
-        TradingDay.objects.filter(pk=session.trading_day_id, status="draft").update(status="active")
-        _audit(session.trading_day.account, session, "SessionStarted")
-        return Response(self.get_serializer(session).data)
+        context = self.get_object()
+        if context.status not in ("planned", "active"):
+            raise ParseError("Only a planned context can be started.")
+        context.status = "active"
+        context.start_at = context.start_at or timezone.now()
+        context.save(update_fields=["status", "start_at", "updated_at"])
+        if context.trading_day_id:
+            TradingDay.objects.filter(pk=context.trading_day_id, status="draft").update(status="active")
+        _audit(context.account, context, "DecisionContextStarted")
+        return Response(self.get_serializer(context).data)
 
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
-        session = self.get_object()
-        if session.campaigns.filter(status__in=["active", "paused"]).exists():
+        context = self.get_object()
+        if context.campaigns.filter(status__in=["active", "paused"]).exists():
             raise ParseError("Close or cancel active campaigns first.")
-        session.status = "closed"
-        session.end_at = session.end_at or timezone.now()
-        session.save(update_fields=["status", "end_at", "updated_at"])
-        _audit(session.trading_day.account, session, "SessionClosed")
-        return Response(self.get_serializer(session).data)
+        context.status = "closed"
+        context.end_at = context.end_at or timezone.now()
+        context.save(update_fields=["status", "end_at", "updated_at"])
+        _audit(context.account, context, "DecisionContextClosed")
+        return Response(self.get_serializer(context).data)
 
     @action(detail=True, methods=["post"])
     def review(self, request, pk=None):
-        session = self.get_object()
-        serializer = SessionReviewSerializer(data=request.data, instance=getattr(session, "review", None))
+        context = self.get_object()
+        serializer = DecisionContextReviewSerializer(data=request.data, instance=getattr(context, "review", None))
         serializer.is_valid(raise_exception=True)
-        serializer.save(session=session)
-        session.status = "reviewed"
-        session.save(update_fields=["status", "updated_at"])
-        _audit(session.trading_day.account, session, "SessionReviewed")
-        return Response(self.get_serializer(session).data)
+        serializer.save(context=context)
+        context.status = "reviewed"
+        context.save(update_fields=["status", "updated_at"])
+        _audit(context.account, context, "DecisionContextReviewed")
+        return Response(self.get_serializer(context).data)
 
 
 class CampaignViewSet(AccountScopedViewSet):
     serializer_class = CampaignSerializer
-    queryset = Campaign.objects.select_related("session__trading_day__account", "decision_snapshot").prefetch_related(
-        "decision_snapshot__scenarios", "attempts__fill_links__fill", "review"
+    queryset = Campaign.objects.select_related("account", "context__trading_day", "decision_snapshot").prefetch_related(
+        "decision_snapshot__scenarios", "decision_updates", "attempts__fill_links__fill", "review"
     )
 
     def get_queryset(self):
-        qs = super().get_queryset().filter(session__trading_day__account=self.request_account())
-        for param, field in (("session", "session_id"), ("status", "status"), ("date", "session__trading_day__trade_date")):
+        qs = super().get_queryset().filter(account=self.request_account())
+        for param, field in (("context", "context_id"), ("status", "status"), ("date", "context__trading_day__trade_date"), ("horizon", "horizon")):
             value = self.request.query_params.get(param)
             if value:
                 qs = qs.filter(**{field: value})
         return qs
 
     def perform_create(self, serializer):
-        session = serializer.validated_data["session"]
-        if session.trading_day.account_id != self.request_account().id:
-            raise ValidationError("Session belongs to another account.")
-        campaign = serializer.save(symbol=serializer.validated_data["symbol"].strip().upper())
+        context = serializer.validated_data["context"]
+        if context.account_id != self.request_account().id:
+            raise ValidationError("Decision context belongs to another account.")
+        horizon = serializer.validated_data.get("horizon", "intraday")
+        if horizon in ("scalp", "intraday") and context.context_kind != "intraday":
+            raise ValidationError("Intraday campaigns require an intraday decision context.")
+        if horizon in ("swing", "position") and context.context_kind != "swing":
+            raise ValidationError("Swing campaigns require a swing decision context.")
+        if context.context_kind == "swing" and context.campaigns.exists():
+            raise ValidationError("A swing decision context belongs to one campaign lifecycle.")
+        campaign = serializer.save(account=self.request_account(), symbol=serializer.validated_data["symbol"].strip().upper())
         _audit(self.request_account(), campaign, "CampaignCreated")
 
     @action(detail=True, methods=["post"], url_path="decision-snapshot")
@@ -287,6 +304,30 @@ class CampaignViewSet(AccountScopedViewSet):
         campaign.save(update_fields=["status", "updated_at"])
         _audit(_campaign_account(campaign), campaign, "CampaignActivated")
         return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["post"], url_path="decision-updates")
+    def decision_updates(self, request, pk=None):
+        campaign = self.get_object()
+        if campaign.horizon not in ("swing", "position"):
+            raise ParseError("Decision updates are intended for swing or position campaigns.")
+        if campaign.status not in ("active", "paused"):
+            raise ParseError("Activate the campaign before recording a decision update.")
+        serializer = DecisionUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            update = serializer.save(campaign=campaign)
+            context = campaign.context
+            if context.context_kind != "swing":
+                raise ValidationError("Swing decision updates require a swing context.")
+            if context.context_type != update.position_stage:
+                context.context_type = update.position_stage
+                context.save(update_fields=["context_type", "updated_at"])
+            _audit(_campaign_account(campaign), campaign, "DecisionUpdated", {
+                "decision_update_id": str(update.id),
+                "position_stage": update.position_stage,
+                "event_type": update.event_type,
+            })
+        return Response(self.get_serializer(self.get_object()).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="attach-fills")
     def attach_fills(self, request, pk=None):
@@ -366,7 +407,7 @@ class CampaignViewSet(AccountScopedViewSet):
                 if previous_attempt_id:
                     prior_attempt = Attempt.objects.filter(
                         pk=previous_attempt_id,
-                        campaign__session__trading_day__account=self.request_account(),
+                        campaign__account=self.request_account(),
                     ).select_related("campaign").first()
                     if not prior_attempt:
                         raise ParseError("The previous attempt is no longer available.")
@@ -426,10 +467,10 @@ class CampaignViewSet(AccountScopedViewSet):
 
 class AttemptViewSet(AccountScopedViewSet):
     serializer_class = AttemptSerializer
-    queryset = Attempt.objects.select_related("campaign__session__trading_day__account").prefetch_related("fill_links__fill")
+    queryset = Attempt.objects.select_related("campaign__account").prefetch_related("fill_links__fill")
 
     def get_queryset(self):
-        return super().get_queryset().filter(campaign__session__trading_day__account=self.request_account())
+        return super().get_queryset().filter(campaign__account=self.request_account())
 
     def perform_create(self, serializer):
         campaign = serializer.validated_data["campaign"]
@@ -442,13 +483,13 @@ class AttemptViewSet(AccountScopedViewSet):
 class JournalAnalyticsAPIView(APIView):
     def get(self, request):
         account = resolve_request_account(request)
-        campaigns = Campaign.objects.filter(session__trading_day__account=account).exclude(status="cancelled")
+        campaigns = Campaign.objects.filter(account=account).exclude(status="cancelled")
         setup_rows = list(campaigns.values("setup").annotate(
             campaigns=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r")
         ).order_by("-total_r"))
-        session_rows = list(campaigns.values("session__session_type").annotate(
+        context_rows = list(campaigns.values("context__context_kind", "context__context_type").annotate(
             campaigns=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r")
-        ).order_by("session__session_type"))
+        ).order_by("context__context_kind", "context__context_type"))
         planned = campaigns.filter(decision_snapshot__isnull=False).aggregate(count=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r"))
         unplanned = campaigns.filter(decision_snapshot__isnull=True).aggregate(count=Count("id"), average_r=Avg("result_r"), total_r=Sum("result_r"))
         sequence_rows = list(Attempt.objects.filter(campaign__in=campaigns).values("sequence_no").annotate(
@@ -456,7 +497,7 @@ class JournalAnalyticsAPIView(APIView):
         ).order_by("sequence_no"))
         return Response({
             "setup": setup_rows,
-            "session": session_rows,
+            "context": context_rows,
             "plan_comparison": {"planned": planned, "unplanned": unplanned},
             "attempt_sequence": sequence_rows,
             "sample_size": campaigns.count(),

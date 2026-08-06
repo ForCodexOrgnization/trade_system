@@ -1,12 +1,12 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from .views import AttemptViewSet, CampaignViewSet, JournalAnalyticsAPIView, JournalFillImportAPIView, SessionViewSet, TradingDayViewSet
+from .views import AttemptViewSet, CampaignViewSet, DecisionContextViewSet, JournalAnalyticsAPIView, JournalFillImportAPIView, TradingDayViewSet
 
 
 router = DefaultRouter()
 router.register("trading-days", TradingDayViewSet, basename="journal-trading-day")
-router.register("sessions", SessionViewSet, basename="journal-session")
+router.register("contexts", DecisionContextViewSet, basename="journal-context")
 router.register("campaigns", CampaignViewSet, basename="journal-campaign")
 router.register("attempts", AttemptViewSet, basename="journal-attempt")
 
