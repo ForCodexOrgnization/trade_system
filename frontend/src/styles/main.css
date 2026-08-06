@@ -2124,22 +2124,6 @@ body {
 }
 
 /* journal + strategy settings enhancements */
-.timeline-filters {
-  display: grid;
-  grid-template-columns: 140px 140px minmax(180px, 260px) auto;
-  align-items: center;
-  justify-content: start;
-  width: 100%;
-  gap: 8px;
-}
-.timeline-strategy-select {
-  width: min(260px, 100%);
-}
-.timeline-filters .small-btn {
-  white-space: nowrap;
-  min-height: 42px;
-  border-radius: 12px;
-}
 .tv-journal-card {
   border: 1px solid var(--tv-line);
   border-radius: 16px;
@@ -2273,7 +2257,6 @@ body {
   width: auto;
 }
 @media (max-width: 900px) {
-  .timeline-filters,
   .journal-entry-grid {
     grid-template-columns: 1fr;
   }

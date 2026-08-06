@@ -13,7 +13,6 @@
         <button :class="['tv-subtab', { active: journalTab === 'pretrade' }]" @click="openPretradeTab">Pre-Trade Plan</button>
         <button :class="['tv-subtab', { active: journalTab === 'workspace' }]" @click="openWorkspaceTab">Review Workspace</button>
         <button :class="['tv-subtab', { active: journalTab === 'analytics' }]" @click="openAnalyticsTab">Analytics</button>
-        <button :class="['tv-subtab', { active: journalTab === 'timeline' }]" @click="openTimelineTab">Journal Timeline</button>
       </div>
     </section>
 
@@ -43,7 +42,7 @@
         <div v-for="card in queue.closed_trades" :key="card.trade_group_id" class="journal-entry-card trade-review-card">
           <div class="trade-review-head">
             <div class="review-head-main">
-              <div class="review-title-row"><strong>{{ card.symbol }}</strong> <span :class="['timeline-pnl-pill', card.realized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative']">{{ card.realized_pnl }}</span> <span :class="['badge', tradeStatusClass(card.status)]">{{ card.status }}</span></div>
+              <div class="review-title-row"><strong>{{ card.symbol }}</strong> <span :class="['review-pnl-pill', card.realized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative']">{{ card.realized_pnl }}</span> <span :class="['badge', tradeStatusClass(card.status)]">{{ card.status }}</span></div>
               <div class="summary-chip-row">
                 <span class="badge" :class="card.realized_pnl >= 0 ? 'badge-profit' : 'badge-loss'">R: {{ card.trade_review?.realized_r ?? '-' }}</span>
                 <span class="badge">Mistake: {{ card.mistake_tags?.[0] || 'No mistake' }}</span>
@@ -430,11 +429,11 @@
           <div class="journal-entry-card">
             <div class="section-title minor">📊 Execution Quality</div>
             <div class="analytics-plan-grid">
-              <div class="timeline-reflection-box reflection-good">
+              <div class="reflection-box reflection-good">
                 <div class="reflection-title">✔ Followed Plan</div>
                 <div>Win {{ analytics.plan_adherence?.followed?.win_rate ?? '-' }}% · Exp {{ analytics.plan_adherence?.followed?.expectancy ?? '-' }}</div>
               </div>
-              <div class="timeline-reflection-box reflection-bad">
+              <div class="reflection-box reflection-bad">
                 <div class="reflection-title">❌ Did NOT Follow</div>
                 <div>Win {{ analytics.plan_adherence?.not_followed?.win_rate ?? '-' }}% · Exp {{ analytics.plan_adherence?.not_followed?.expectancy ?? '-' }}</div>
               </div>
@@ -503,73 +502,6 @@
       </div>
     </section>
 
-    <section v-else class="card">
-      <div class="section-title">Journal Timeline</div>
-      <div class="journal-form-grid timeline-filter-grid">
-        <label :title="fieldHint('date_from')"><span>Date From</span><input v-model="timelineDateFrom" type="date" @change="loadTimeline" @click="openDatePicker" @focus="openDatePicker" /></label>
-        <label :title="fieldHint('date_to')"><span>Date To</span><input v-model="timelineDateTo" type="date" @change="loadTimeline" @click="openDatePicker" @focus="openDatePicker" /></label>
-        <label><span>Strategy contains</span><input v-model="timelineStrategyQuery" placeholder="breakout / opening..." /></label>
-        <label><span>Session</span><select v-model="timelineSessionFilter"><option value="">All</option><option value="open">open</option><option value="midday">midday</option><option value="close">close</option><option value="overnight">overnight</option></select></label>
-        <label><span>Loss days only</span><select v-model="timelineLossOnly"><option :value="false">No</option><option :value="true">Yes</option></select></label>
-        <label><span>Low emotion only (<=4)</span><select v-model="timelineLowEmotionOnly"><option :value="false">No</option><option :value="true">Yes</option></select></label>
-        <button class="secondary" @click="loadTimeline">Refresh</button>
-      </div>
-      <div v-if="!filteredTimeline.length" class="empty-row">No daily reviews matched the filters.</div>
-      <div v-for="item in filteredTimeline" :key="item.id" class="journal-entry-card timeline-day-card" style="margin-bottom:10px;">
-        <div class="timeline-header-row">
-          <div class="timeline-header-left">
-            <strong>📅 {{ item.review_date }}</strong>
-            <span :class="['badge', timelineStatusClass(item.review_status)]">{{ (item.review_status || 'draft').toUpperCase() }}</span>
-            <span class="badge">{{ (item.related_trade_groups_display || []).length }} trade(s)</span>
-          </div>
-          <div class="timeline-header-right">
-            <span :class="['timeline-pnl-pill', dailyPnl(item) >= 0 ? 'pnl-positive' : 'pnl-negative']">{{ dailyPnl(item) >= 0 ? '🟢' : '🔴' }} {{ dailyPnl(item) }}</span>
-            <span class="muted-copy">Updated {{ item.updated_at ? new Date(item.updated_at).toLocaleString() : '-' }}</span>
-          </div>
-        </div>
-
-        <div class="chip-wrap timeline-tag-row">
-          <span v-for="tag in mistakeNames(item)" :key="`mist-tag-${item.id}-${tag}`" class="badge badge-loss">{{ tag }}</span>
-          <span v-if="!mistakeNames(item).length" class="badge">No execution tags</span>
-          <span v-for="setup in setupTagsFromDay(item)" :key="`setup-tag-${item.id}-${setup}`" class="badge">{{ setup }}</span>
-        </div>
-
-        <div class="timeline-meta-grid">
-          <div class="timeline-mini-card">Session: {{ item.session || '-' }}</div>
-          <div class="timeline-mini-card">Condition: {{ item.market_condition || '-' }}</div>
-          <div class="timeline-mini-card">Discipline: {{ item.discipline_score ?? '-' }}</div>
-          <div class="timeline-mini-card">Emotion: {{ item.emotional_control_score ?? '-' }}</div>
-          <div class="timeline-mini-card">Regime/Bias: {{ item.market_regime || '-' }} / {{ item.daily_bias || '-' }}</div>
-          <div class="timeline-mini-card">Images: {{ item.images?.length || 0 }}</div>
-        </div>
-
-        <div class="timeline-reflection-grid">
-          <div class="timeline-reflection-box reflection-good">
-            <div class="reflection-title">✔ 做对了</div>
-            <div>{{ item.market_summary || '-' }}</div>
-          </div>
-          <div class="timeline-reflection-box reflection-bad">
-            <div class="reflection-title">❌ 错在哪</div>
-            <div>{{ item.biggest_mistake || '-' }}</div>
-          </div>
-          <div class="timeline-reflection-box reflection-next">
-            <div class="reflection-title">→ 明天改什么</div>
-            <div>{{ item.next_day_plan || '-' }}</div>
-          </div>
-        </div>
-        <div class="filter-action-row" style="margin-top:8px;">
-          <button class="secondary small-btn" @click="toggleTimelineTrades(item.review_date)">{{ expandedTimelineDates.includes(item.review_date) ? 'Hide Trades' : 'Show Trades' }}</button>
-          <span class="muted-copy" v-if="timelineLoadingDate === item.review_date">Loading trade details...</span>
-        </div>
-        <div v-if="expandedTimelineDates.includes(item.review_date)" class="accordion-body" style="padding-top:8px;">
-          <div v-if="!(timelineTradeDetailsByDate[item.review_date] || []).length" class="empty-row">No closed trades for this date.</div>
-          <div v-for="card in (timelineTradeDetailsByDate[item.review_date] || [])" :key="`tl-${item.review_date}-${card.trade_group_id}`" class="review-item">
-            {{ card.symbol }} · PnL {{ card.realized_pnl }} · Exec {{ card.executions_count }} · Hold {{ card.hold_minutes ?? '-' }}m · EntryQ {{ card.trade_review?.entry_quality ?? '-' }} · ExitQ {{ card.trade_review?.exit_quality ?? '-' }} · RiskQ {{ card.trade_review?.risk_management ?? '-' }} · R {{ card.trade_review?.realized_r ?? '-' }}
-          </div>
-        </div>
-      </div>
-    </section>
-
     <div v-if="confirmDialog.visible" class="confirm-modal-mask" @click="cancelConfirm">
       <div class="confirm-modal-card" @click.stop>
         <div class="section-title minor">{{ confirmDialog.title }}</div>
@@ -586,10 +518,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import TradesVizChart from '../components/TradesVizChart.vue'
-import { responseRows } from '../api/pagination'
 import {
   createDailyReview,
-  fetchDailyReviews,
   fetchMistakeTags,
   fetchPretradePlans,
   fetchReviewQueue,
@@ -626,16 +556,6 @@ const maxLossSelection = ref('')
 const tradeSectionRef = ref(null)
 const dailySectionRef = ref(null)
 const positionSectionRef = ref(null)
-const dailyTimeline = ref([])
-const timelineDateFrom = ref('')
-const timelineDateTo = ref('')
-const timelineStrategyQuery = ref('')
-const timelineSessionFilter = ref('')
-const timelineLossOnly = ref(false)
-const timelineLowEmotionOnly = ref(false)
-const expandedTimelineDates = ref([])
-const timelineTradeDetailsByDate = ref({})
-const timelineLoadingDate = ref('')
 const pretradeDate = ref(new Date().toISOString().slice(0, 10))
 const pretradeForm = ref({ id: null, plan_date: pretradeDate.value, session: 'premarket', market_regime: '', watchlist: [], catalysts: '', game_plan: '', pre_trade_checklist: {}, risk_budget_r: null, notes: '' })
 const pretradeSessions = ref(['premarket'])
@@ -733,8 +653,6 @@ const FIELD_HINTS = {
   hold_overnight: '继续持仓到次日的原因。',
   risk_tomorrow: '次日可能面临的主要风险。',
   next_action: '次日计划动作（持有/减仓/平仓条件）。',
-  date_from: '时间线起始日期。',
-  date_to: '时间线结束日期。',
   primary_mistake_type: '错误主类型硬分类，用于后续成本归因。',
   mistake_severity: '错误严重度硬分类。',
   rule_violation_type: '违规规则类型硬分类。',
@@ -911,17 +829,6 @@ function toSnapshotNotes(row) {
   return lines.join('\n')
 }
 
-const filteredTimeline = computed(() => {
-  return (dailyTimeline.value || []).filter((item) => {
-    const strategyOk = !timelineStrategyQuery.value || (item.strategy || '').toLowerCase().includes(timelineStrategyQuery.value.toLowerCase())
-    const sessionOk = !timelineSessionFilter.value || (item.session || '') === timelineSessionFilter.value
-    const pnl = dailyPnl(item)
-    const lossOk = !timelineLossOnly.value || pnl < 0
-    const emotionOk = !timelineLowEmotionOnly.value || ((item.emotional_control_score ?? 999) <= 4)
-    return strategyOk && sessionOk && lossOk && emotionOk
-  })
-})
-
 function toggleCard(id) { expandedCards.value = expandedCards.value.includes(id) ? expandedCards.value.filter((v) => v !== id) : [...expandedCards.value, id] }
 function togglePosition(id) { expandedPositions.value = expandedPositions.value.includes(id) ? expandedPositions.value.filter((v) => v !== id) : [...expandedPositions.value, id] }
 function toggleSnapshotCard(localId) {
@@ -1062,24 +969,6 @@ async function loadQueue() {
   syncLabelTitleTargets()
 }
 
-async function loadTimeline() {
-  const params = { page_size: 20 }
-  if (timelineDateFrom.value) params.date_from = timelineDateFrom.value
-  if (timelineDateTo.value) params.date_to = timelineDateTo.value
-  const timelineRes = await fetchDailyReviews(params)
-  dailyTimeline.value = responseRows(timelineRes.data)
-}
-
-function dailyPnl(item) {
-  return (item.related_trade_groups_display || []).reduce((sum, t) => sum + Number(t.realized_pnl || 0), 0)
-}
-
-function timelineStatusClass(status) {
-  if ((status || '').toLowerCase() === 'completed') return 'badge-profit'
-  if ((status || '').toLowerCase() === 'draft') return 'badge-muted'
-  return ''
-}
-
 function tradeStatusClass(status) {
   const value = (status || '').toLowerCase()
   if (value === 'closed') return 'badge-profit'
@@ -1092,39 +981,6 @@ function missingItemBadgeClass(item) {
   if (['mistake_tags', 'screenshot'].includes(item)) return 'badge-warning'
   return 'badge'
 }
-
-function mistakeNames(item) {
-  const ids = item.mistake_tags || []
-  return ids.map((id) => (mistakeTags.value || []).find((t) => t.id === id)?.name).filter(Boolean)
-}
-
-function setupTagsFromDay(item) {
-  const cards = timelineTradeDetailsByDate.value[item.review_date] || []
-  return Array.from(new Set(cards.map((card) => card.setup_name).filter(Boolean)))
-}
-
-async function toggleTimelineTrades(reviewDate) {
-  if (expandedTimelineDates.value.includes(reviewDate)) {
-    expandedTimelineDates.value = expandedTimelineDates.value.filter((d) => d !== reviewDate)
-    return
-  }
-  expandedTimelineDates.value = [...expandedTimelineDates.value, reviewDate]
-  if (timelineTradeDetailsByDate.value[reviewDate]) return
-  timelineLoadingDate.value = reviewDate
-  try {
-    const res = await fetchReviewQueue(reviewDate)
-    timelineTradeDetailsByDate.value[reviewDate] = res.data?.closed_trades || []
-  } finally {
-    timelineLoadingDate.value = ''
-  }
-}
-
-async function openTimelineTab() {
-  journalTab.value = 'timeline'
-  if (!dailyTimeline.value.length) await loadTimeline()
-  syncLabelTitleTargets()
-}
-
 
 async function openWorkspaceTab() {
   queueDate.value = pretradeDate.value
@@ -1576,7 +1432,6 @@ onMounted(async () => {
   document.addEventListener('click', handleDocumentClick)
   await loadMetaTags()
   await loadQueue()
-  await loadTimeline()
   await loadPretrade()
   await loadAnalytics()
   syncLabelTitleTargets()
@@ -1869,7 +1724,6 @@ onBeforeUnmount(() => {
 .workspace-field-grid :deep(input),
 .workspace-field-grid :deep(select),
 .workspace-summary-grid :deep(input),
-.timeline-filter-grid :deep(input),
 .trade-review-form-grid :deep(input),
 .trade-review-form-grid :deep(select),
 .trade-review-text-grid :deep(textarea) {
@@ -1880,8 +1734,6 @@ onBeforeUnmount(() => {
 .workspace-field-grid :deep(input[type='radio']),
 .workspace-summary-grid :deep(input[type='checkbox']),
 .workspace-summary-grid :deep(input[type='radio']),
-.timeline-filter-grid :deep(input[type='checkbox']),
-.timeline-filter-grid :deep(input[type='radio']),
 .trade-review-form-grid :deep(input[type='checkbox']),
 .trade-review-form-grid :deep(input[type='radio']) {
   padding: 0;
@@ -2216,28 +2068,7 @@ onBeforeUnmount(() => {
   margin: 6px 0;
 }
 
-.timeline-day-card {
-  border: 1px solid #dbe3f4;
-  border-radius: 12px;
-}
-
-.timeline-header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.timeline-header-left,
-.timeline-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.timeline-pnl-pill {
+.review-pnl-pill {
   font-size: 18px;
   font-weight: 700;
   padding: 4px 10px;
@@ -2254,31 +2085,7 @@ onBeforeUnmount(() => {
   color: #b91c1c;
 }
 
-.timeline-tag-row {
-  margin: 6px 0 8px;
-}
-
-.timeline-meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
-}
-
-.timeline-mini-card {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 6px 10px;
-  background: #f8fafc;
-  font-size: 13px;
-}
-
-.timeline-reflection-grid {
-  margin-top: 8px;
-  display: grid;
-  gap: 8px;
-}
-
-.timeline-reflection-box {
+.reflection-box {
   border-radius: 8px;
   border: 1px solid #e2e8f0;
   padding: 8px 10px;
@@ -2297,26 +2104,15 @@ onBeforeUnmount(() => {
   background: #fef2f2;
 }
 
-.reflection-next {
-  background: #eff6ff;
-}
-
 .badge-muted {
   background: #e5e7eb;
   color: #374151;
 }
 
-.timeline-filter-grid {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 260px));
-  gap: 10px 12px;
-  align-items: end;
-}
-
 @media (max-width: 900px) {
   .trade-card-grid,
   .workspace-summary-grid,
-  .workspace-field-grid,
-  .timeline-filter-grid {
+  .workspace-field-grid {
     grid-template-columns: 1fr;
   }
 }

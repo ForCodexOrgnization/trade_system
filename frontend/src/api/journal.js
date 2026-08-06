@@ -1,6 +1,5 @@
 import api from './client'
 
-export const fetchDailyReviews = (params = {}) => api.get('/journal/daily-reviews/', { params })
 export const createDailyReview = (payload) => api.post('/journal/daily-reviews/', payload)
 export const updateDailyReview = (id, payload) => api.patch(`/journal/daily-reviews/${id}/`, payload)
 export const deleteDailyReview = (id) => api.delete(`/journal/daily-reviews/${id}/`)

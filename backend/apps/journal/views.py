@@ -8,7 +8,7 @@ from django.db import connection
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -79,25 +79,19 @@ def _daily_review_column_exists(column_name):
     return column_name in columns
 
 
-class DailyReviewViewSet(AccountScopedMixin, viewsets.ModelViewSet):
+class DailyReviewViewSet(
+    AccountScopedMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     queryset = DailyReview.objects.all().order_by('-review_date', '-updated_at')
     serializer_class = DailyReviewSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset().filter(account=self.get_request_account())
-        review_date = self.request.query_params.get('date')
-        date_from = self.request.query_params.get('date_from')
-        date_to = self.request.query_params.get('date_to')
-        strategy = self.request.query_params.get('strategy')
-        if review_date:
-            qs = qs.filter(review_date=review_date)
-        if date_from:
-            qs = qs.filter(review_date__gte=date_from)
-        if date_to:
-            qs = qs.filter(review_date__lte=date_to)
-        if strategy:
-            qs = qs.filter(strategy__icontains=strategy)
-        return qs
+        return super().get_queryset().filter(account=self.get_request_account())
 
     def create(self, request, *args, **kwargs):
         account = self.get_request_account()
