@@ -173,6 +173,22 @@ def _recalculate_campaign(campaign):
         )
 
 
+def _normalize_attempt_sequences(campaign):
+    attempts = list(campaign.attempts.order_by("entry_at", "created_at", "sequence_no"))
+    for index, attempt in enumerate(attempts, start=1):
+        Attempt.objects.filter(pk=attempt.pk).update(sequence_no=1000 + index)
+    for index, attempt in enumerate(attempts, start=1):
+        Attempt.objects.filter(pk=attempt.pk).update(sequence_no=index)
+
+
+def _delete_empty_attempts(campaign):
+    empty_ids = list(campaign.attempts.filter(fill_links__isnull=True).values_list("id", flat=True))
+    if empty_ids:
+        Attempt.objects.filter(id__in=empty_ids).delete()
+        _normalize_attempt_sequences(campaign)
+    return len(empty_ids)
+
+
 class AccountScopedViewSet(viewsets.ModelViewSet):
     def request_account(self):
         if not hasattr(self, "_journal_account"):
@@ -322,6 +338,26 @@ class CampaignViewSet(AccountScopedViewSet):
             raise ParseError("Campaign fields are locked after the first fill. Use a correction record for data-entry errors.")
         return super().update(request, *args, **kwargs)
 
+    def destroy(self, request, *args, **kwargs):
+        campaign = self.get_object()
+        if AttemptFill.objects.filter(attempt__campaign=campaign).exists():
+            raise ParseError("Campaigns with executions cannot be deleted. Use correction records and complete the review instead.")
+        account = campaign.account
+        context = campaign.context
+        campaign_id = campaign.id
+        _audit(account, campaign, "CampaignDeleted", {"symbol": campaign.symbol, "setup": campaign.setup})
+        campaign.delete()
+        context_total = Campaign.objects.filter(context=context).exclude(status="cancelled").aggregate(value=Sum("result_r"))["value"] or ZERO
+        DecisionContext.objects.filter(pk=context.pk).update(result_r=context_total)
+        if context.trading_day_id:
+            day_totals = Campaign.objects.filter(context__trading_day=context.trading_day).exclude(status="cancelled").aggregate(
+                pnl=Sum("realized_pnl"), result_r=Sum("result_r")
+            )
+            TradingDay.objects.filter(pk=context.trading_day_id).update(
+                realized_pnl=day_totals["pnl"] or ZERO, total_r=day_totals["result_r"] or ZERO,
+            )
+        return Response({"deleted": str(campaign_id)}, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["post"], url_path="decision-versions")
     def decision_versions(self, request, pk=None):
         campaign = self.get_object()
@@ -341,12 +377,34 @@ class CampaignViewSet(AccountScopedViewSet):
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
         campaign = self.get_object()
+        if campaign.status not in ("planned", "paused"):
+            raise ParseError("Only planned or paused campaigns can be activated.")
         readiness = CampaignSerializer(campaign).data["readiness"]
         if not readiness["ready"]:
             raise ValidationError({"readiness": readiness})
         campaign.status = "active"
         campaign.save(update_fields=["status", "updated_at"])
         _audit(_campaign_account(campaign), campaign, "CampaignActivated")
+        return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["post"])
+    def pause(self, request, pk=None):
+        campaign = self.get_object()
+        if campaign.status != "active":
+            raise ParseError("Only active campaigns can be paused.")
+        campaign.status = "paused"
+        campaign.save(update_fields=["status", "updated_at"])
+        _audit(_campaign_account(campaign), campaign, "CampaignPaused")
+        return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["post"])
+    def resume(self, request, pk=None):
+        campaign = self.get_object()
+        if campaign.status != "paused":
+            raise ParseError("Only paused campaigns can be resumed.")
+        campaign.status = "active"
+        campaign.save(update_fields=["status", "updated_at"])
+        _audit(_campaign_account(campaign), campaign, "CampaignResumed")
         return Response(self.get_serializer(campaign).data)
 
     @action(detail=True, methods=["post"], url_path="decision-updates")
@@ -408,6 +466,9 @@ class CampaignViewSet(AccountScopedViewSet):
                 if not attempt:
                     raise ValidationError({"attempt_id": "Attempt does not belong to this campaign."})
             else:
+                if campaign.status == "paused":
+                    raise ParseError("Resume the campaign before creating a new attempt. Closing fills may still be attached to an existing attempt.")
+                _delete_empty_attempts(campaign)
                 sequence = (campaign.attempts.order_by("-sequence_no").values_list("sequence_no", flat=True).first() or 0) + 1
                 if sequence > campaign.max_attempts:
                     raise ValidationError({"attempt": "Campaign maximum attempts has been reached."})
@@ -433,7 +494,8 @@ class CampaignViewSet(AccountScopedViewSet):
             for old in old_attempts:
                 if old.pk != attempt.pk:
                     _recalculate_attempt(old)
-                    _recalculate_campaign(old.campaign)
+                    old_campaign = old.campaign
+                    _recalculate_campaign(old_campaign)
             _recalculate_attempt(attempt)
             _recalculate_campaign(campaign)
             if campaign.status == "planned":
@@ -488,12 +550,15 @@ class CampaignViewSet(AccountScopedViewSet):
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
         campaign = self.get_object()
+        _delete_empty_attempts(campaign)
         for attempt in campaign.attempts.all():
             _recalculate_attempt(attempt)
         _recalculate_campaign(campaign)
         campaign.refresh_from_db()
-        if campaign.attempts.exclude(status__in=["closed", "voided"]).exists():
-            raise ParseError("All attempts must be closed before the campaign can close.")
+        if campaign.attempts.filter(status__in=["open", "scaling"]).exists():
+            raise ParseError("The campaign still has an open position. Attach the closing fill to the open attempt before ending the decision.")
+        if not campaign.attempts.filter(status="closed").exists():
+            raise ParseError("A campaign needs at least one completed attempt before it can end.")
         campaign.status = "review_pending"
         campaign.closed_at = timezone.now()
         campaign.save(update_fields=["status", "closed_at", "updated_at"])
@@ -536,6 +601,20 @@ class AttemptViewSet(AccountScopedViewSet):
             raise ValidationError("Campaign belongs to another account.")
         sequence = (campaign.attempts.order_by("-sequence_no").values_list("sequence_no", flat=True).first() or 0) + 1
         serializer.save(sequence_no=sequence)
+
+    def destroy(self, request, *args, **kwargs):
+        attempt = self.get_object()
+        if attempt.fill_links.exists():
+            raise ParseError("Attempts with fills cannot be deleted. Correct the fill grouping instead.")
+        campaign = attempt.campaign
+        attempt_id = attempt.id
+        _audit(_campaign_account(campaign), campaign, "EmptyAttemptDeleted", {
+            "attempt_id": str(attempt.id), "sequence_no": attempt.sequence_no,
+        })
+        attempt.delete()
+        _normalize_attempt_sequences(campaign)
+        _recalculate_campaign(campaign)
+        return Response({"deleted": str(attempt_id)}, status=status.HTTP_200_OK)
 
 
 class JournalAnalyticsAPIView(APIView):

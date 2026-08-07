@@ -138,17 +138,27 @@ class CampaignSerializer(serializers.ModelSerializer):
     def get_lifecycle(self, obj):
         locked = hasattr(obj, "decision_snapshot")
         ended = obj.status in ("closed", "review_pending", "reviewed", "cancelled")
+        attempts = list(obj.attempts.all())
+        has_fills = any(item.fill_links.all() for item in attempts)
+        has_open_position = any(item.status in ("open", "scaling") for item in attempts)
         if ended:
             phase = "review"
-        elif locked:
+        elif locked and has_open_position:
             phase = "holding"
+        elif locked:
+            phase = "ready_to_close"
         else:
             phase = "pre_trade"
         return {
             "phase": phase,
             "decision_locked": locked,
             "can_edit_decision": not locked and not ended,
-            "can_add_update": locked and not ended,
+            "can_add_update": locked and has_open_position and not ended,
+            "can_close": locked and has_fills and not has_open_position and obj.status in ("active", "paused"),
+            "can_delete": not has_fills,
+            "can_pause": obj.status == "active",
+            "can_resume": obj.status == "paused",
+            "has_open_position": has_open_position,
             "can_review": ended,
             "version_count": obj.decision_versions.count(),
         }

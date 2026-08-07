@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from apps.common.models import BrokerAccount
 from apps.trades.models import RawIBKRExecution, TradeFill
 
-from .models import Campaign, CorrectionRecord, DecisionContext, DecisionSnapshot, DecisionVersion, TradingDay
+from .models import Attempt, Campaign, CorrectionRecord, DecisionContext, DecisionSnapshot, DecisionVersion, TradingDay
 
 
 class JournalMVPTests(TestCase):
@@ -283,3 +283,43 @@ class JournalMVPTests(TestCase):
         self.assertEqual(updated.status_code, 201)
         self.assertEqual(updated.data["context_type"], "holding")
         self.assertEqual(updated.data["decision_updates"][0]["decision"], "Hold the current size.")
+
+    def test_safe_deletion_pause_resume_and_close_guard(self):
+        dirty = Campaign.objects.create(
+            account=self.account, context=self.context, symbol="MCL", direction="long", setup="Mistake",
+            horizon="intraday", planned_risk_amount="100", max_risk_r="1", max_attempts=2,
+        )
+        deleted = self.client.delete(f"/api/journal/campaigns/{dirty.id}/?account=DU-JOURNAL")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(Campaign.objects.filter(pk=dirty.id).exists())
+
+        self.assertEqual(self.create_version().status_code, 201)
+        self.assertEqual(self.client.post(f"/api/journal/campaigns/{self.campaign.id}/activate/?account=DU-JOURNAL").status_code, 200)
+        paused = self.client.post(f"/api/journal/campaigns/{self.campaign.id}/pause/?account=DU-JOURNAL")
+        self.assertEqual(paused.data["status"], "paused")
+        resumed = self.client.post(f"/api/journal/campaigns/{self.campaign.id}/resume/?account=DU-JOURNAL")
+        self.assertEqual(resumed.data["status"], "active")
+
+        buy = self.create_fill("guard-buy", "BUY", "1", "0", 3)
+        grouped = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [buy.id]}, format="json",
+        )
+        self.assertEqual(grouped.status_code, 200)
+        self.assertTrue(grouped.data["lifecycle"]["has_open_position"])
+        self.assertFalse(grouped.data["lifecycle"]["can_close"])
+        empty_attempt = Attempt.objects.create(campaign=self.campaign, sequence_no=2)
+        removed_attempt = self.client.delete(f"/api/journal/attempts/{empty_attempt.id}/?account=DU-JOURNAL")
+        self.assertEqual(removed_attempt.status_code, 200)
+        self.assertFalse(Attempt.objects.filter(pk=empty_attempt.id).exists())
+        self.assertEqual(self.client.delete(f"/api/journal/campaigns/{self.campaign.id}/?account=DU-JOURNAL").status_code, 400)
+        blocked_close = self.client.post(f"/api/journal/campaigns/{self.campaign.id}/close/?account=DU-JOURNAL")
+        self.assertEqual(blocked_close.status_code, 400)
+
+        sell = self.create_fill("guard-sell", "SELL", "-1", "5", 4)
+        closed_attempt = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [sell.id], "attempt_id": grouped.data["attempts"][0]["id"]}, format="json",
+        )
+        self.assertFalse(closed_attempt.data["lifecycle"]["has_open_position"])
+        self.assertTrue(closed_attempt.data["lifecycle"]["can_close"])

@@ -157,15 +157,19 @@
               <div class="row-actions">
                 <button v-if="campaign.lifecycle?.can_edit_decision && campaign.current_decision" class="secondary small-btn" @click="editCampaign(campaign)">{{ t('editAndSaveVersion') }}</button>
                 <button v-if="campaign.status === 'planned' && campaign.current_decision" class="secondary small-btn" @click="activateCampaign(campaign)">{{ t('activate') }}</button>
+                <button v-if="campaign.lifecycle?.can_pause" class="secondary small-btn" @click="pauseCampaign(campaign)">{{ t('pauseCampaign') }}</button>
+                <button v-if="campaign.lifecycle?.can_resume" class="secondary small-btn" @click="resumeCampaign(campaign)">{{ t('resumeCampaign') }}</button>
                 <button v-if="campaign.lifecycle?.can_add_update" class="secondary small-btn" @click="openDecisionUpdate(campaign)">{{ t('decisionUpdate') }}</button>
-                <button v-if="['active', 'paused'].includes(campaign.status) && campaign.attempts.length" class="secondary small-btn" @click="closeCampaign(campaign)">{{ t('closeCampaign') }}</button>
+                <button v-if="campaign.lifecycle?.can_close" class="secondary small-btn" @click="closeCampaign(campaign)">{{ t('closeCampaign') }}</button>
+                <span v-else-if="campaign.lifecycle?.has_open_position" class="flow-hint">{{ t('closePositionFirst') }}</span>
                 <button v-if="['review_pending', 'closed'].includes(campaign.status)" class="small-btn" @click="openReview(campaign)">{{ t('review') }}</button>
                 <button v-if="campaign.lifecycle?.decision_locked" class="text-button correction-button" @click="openCorrection(campaign)">{{ t('recordCorrection') }}</button>
+                <button v-if="campaign.lifecycle?.can_delete" class="text-button delete-button" @click="removeCampaign(campaign)">{{ t('deleteDirtyCampaign') }}</button>
               </div>
               <details v-if="campaign.decision_versions?.length" class="version-history"><summary>{{ t('versionHistory') }} · {{ campaign.decision_versions.length }}</summary><div v-for="versionItem in campaign.decision_versions" :key="versionItem.id" class="version-row"><strong>v{{ versionItem.version_no }}</strong><span>{{ shortDateTime(versionItem.created_at) }}</span><span>{{ versionItem.change_note || t('initialVersion') }}</span></div></details>
               <div v-if="campaign.attempts.length" class="attempt-list">
                 <div v-for="attempt in campaign.attempts" :key="attempt.id" class="attempt-row">
-                  <strong>#{{ attempt.sequence_no }}</strong><span>{{ enumLabel(attempt.status) }}</span><span>{{ attempt.fills.length }} {{ t('fillsLower') }}</span><span :class="numberClass(attempt.result_r)">{{ number(attempt.result_r) }}R</span>
+                  <strong>#{{ attempt.sequence_no }}</strong><span>{{ enumLabel(attempt.status) }}</span><span>{{ attempt.fills.length }} {{ t('fillsLower') }}</span><span :class="numberClass(attempt.result_r)">{{ number(attempt.result_r) }}R</span><button v-if="!attempt.fills.length" class="text-button delete-button" @click="removeAttempt(attempt)">{{ t('deleteEmptyAttempt') }}</button>
                 </div>
               </div>
               <div v-if="campaign.decision_updates?.length" class="decision-update-list">
@@ -206,6 +210,7 @@
 
         <section class="card grouping-workspace">
           <div class="column-heading"><div><div class="section-title">{{ t('fillGrouping') }}</div><span class="muted-copy">{{ t('fillGroupingHelp') }}</span></div><span class="badge">{{ selectedFillIds.length }} {{ t('selected') }}</span></div>
+          <div class="grouping-flow-guide"><strong>{{ t('groupingNextStep') }}</strong><span>{{ t('groupingNextStepHelp') }}</span></div>
           <div class="csv-import-row">
             <div><strong>{{ t('csvImport') }}</strong><span>{{ t('csvImportHelp') }}</span></div>
             <label class="csv-file-picker"><span>{{ t('chooseCsv') }}</span><input type="file" accept=".csv,text/csv" @change="importCsv" /></label>
@@ -293,8 +298,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import {
   activateJournalCampaign, attachJournalFills, closeJournalCampaign, closeJournalContext,
   createCorrectionRecord, createDecisionUpdate, createDecisionVersion, createJournalCampaign, createJournalContext, createJournalToday,
-  fetchJournalAnalytics, fetchJournalCampaigns, fetchJournalContexts, fetchJournalToday, reviewJournalCampaign,
-  importJournalFills, startJournalContext, undoJournalGrouping, updateJournalCampaign,
+  deleteJournalAttempt, deleteJournalCampaign, fetchJournalAnalytics, fetchJournalCampaigns, fetchJournalContexts, fetchJournalToday,
+  importJournalFills, pauseJournalCampaign, resumeJournalCampaign, reviewJournalCampaign,
+  startJournalContext, undoJournalGrouping, updateJournalCampaign,
 } from '../api/journal'
 import { responseRows } from '../api/pagination'
 import { formatNumber } from '../utils/formatters'
@@ -327,7 +333,10 @@ const messages = {
     confirmation: 'Confirmation', confirmationPlaceholder: 'Evidence that supports it', contradiction: 'Contradiction', contradictionPlaceholder: 'Evidence against it', plannedAction: 'Planned action',
     plannedActionPlaceholder: 'What will you do?', addThirdScenario: 'Add third scenario', savePlanned: 'Save as planned', saveAndActivate: 'Save & activate', createDecisionFirst: 'Create a decision snapshot before grouping executions.',
     readiness: 'Readiness', risk: 'Risk', result: 'Result', trigger: 'Trigger', activate: 'Activate', closeCampaign: 'Close decision', review: 'Review', fillsLower: 'fills',
+    pauseCampaign: 'Pause', resumeCampaign: 'Resume', closePositionFirst: 'Open position · attach the closing fill first', deleteDirtyCampaign: 'Delete', deleteEmptyAttempt: 'Delete empty attempt',
+    deleteCampaignConfirm: 'Delete this campaign and all of its pre-trade versions? This is only allowed when it has no fills.', deleteAttemptConfirm: 'Delete this empty attempt?',
     fillGrouping: 'Fill grouping workspace', fillGroupingHelp: 'Select fills to create an attempt, or move grouped fills to merge and split attempts.', selected: 'selected', csvImport: 'CSV import',
+    groupingNextStep: 'After grouping:', groupingNextStepHelp: 'Entry fill → position opens → append updates while holding → attach the exit fill to the same attempt → position becomes closed → end the decision → review.',
     csvImportHelp: 'Import broker fills; duplicates are detected automatically.', targetCampaign: 'Target decision', selectCampaign: 'Select decision', targetAttempt: 'Target attempt', createNewAttempt: 'Create new attempt',
     attempt: 'Attempt', reentryReason: 'Re-entry reason', firstEntry: 'First entry', whatChanged: 'What changed?', reentryRequired: 'Required for a re-entry', applyGrouping: 'Apply grouping',
     undoGrouping: 'Undo last grouping', time: 'Time', side: 'Side', qty: 'Qty', price: 'Price', currentGroup: 'Current group', noFills: 'No fills for this day.', reviewQueue: 'Review queue', attemptsLower: 'attempts',
@@ -361,7 +370,10 @@ const messages = {
     confirmation: '确认信号', confirmationPlaceholder: '什么证据支持该情景？', contradiction: '反证信号', contradictionPlaceholder: '什么证据否定该情景？', plannedAction: '计划行动', plannedActionPlaceholder: '你准备怎么做？',
     addThirdScenario: '添加第三种情景', savePlanned: '保存为计划', saveAndActivate: '保存并激活', createDecisionFirst: '请先创建决策快照，再归组成交。', readiness: '准备度', risk: '风险', result: '结果', trigger: '触发条件',
     activate: '激活', closeCampaign: '结束决策', review: '复盘', fillsLower: '笔成交', fillGrouping: '成交归组工作区', fillGroupingHelp: '选择成交后创建尝试；也可移动已归组的成交，以合并或拆分尝试。', selected: '项已选择',
+    pauseCampaign: '暂停', resumeCampaign: '恢复', closePositionFirst: '持仓未平 · 请先把平仓成交归入当前尝试', deleteDirtyCampaign: '删除', deleteEmptyAttempt: '删除空尝试',
+    deleteCampaignConfirm: '确定删除这个决策及其全部交易前版本吗？只有没有任何成交的决策可以删除。', deleteAttemptConfirm: '确定删除这个没有成交的空尝试吗？',
     csvImport: 'CSV 导入', csvImportHelp: '导入券商成交记录，系统会自动识别重复数据。', targetCampaign: '目标决策', selectCampaign: '选择决策', targetAttempt: '目标尝试', createNewAttempt: '创建新尝试', attempt: '尝试',
+    groupingNextStep: '归组后的流程：', groupingNextStepHelp: '入场成交 → 形成持仓 → 持仓中追加决策更新 → 把平仓成交归入同一尝试 → 尝试自动变为已结束 → 结束决策 → 填写复盘。',
     reentryReason: '再次入场原因', firstEntry: '首次入场', whatChanged: '发生了什么变化？', reentryRequired: '再次入场时必填', applyGrouping: '执行归组', undoGrouping: '撤销上次归组', time: '时间', side: '买卖方向', qty: '数量', price: '价格',
     currentGroup: '当前归组', noFills: '当天没有成交记录。', reviewQueue: '待复盘', attemptsLower: '次尝试', campaignReview: '决策复盘', campaignReviewHelp: '把决策质量、执行质量与运气分别评分。', exitReason: '退出原因', actualScenario: '实际发生的情景',
     unclear: '不明确', decisionGrade: '决策评分', executionGrade: '执行评分', entryFollowed: '入场是否遵守计划', managementFollowed: '持仓管理是否遵守计划', exitFollowed: '退出是否遵守计划', outcomeDrivers: '结果驱动因素（最多 2 个）',
@@ -374,7 +386,7 @@ const messages = {
 const enumMessages = {
   en: {
     draft: 'Draft', active: 'Active', planned: 'Planned', paused: 'Paused', closed: 'Closed', review_pending: 'Review pending', reviewed: 'Reviewed', cancelled: 'Cancelled', open: 'Open', scaling: 'Scaling', pending: 'Pending', voided: 'Voided',
-    pre_trade: 'Pre-trade · editable', review: 'Review only',
+    pre_trade: 'Pre-trade · editable', ready_to_close: 'Flat · ready to close', review: 'Review only',
     premarket: 'Pre-market', opening: 'Opening', morning: 'Morning', midday: 'Midday', power_hour: 'Power hour', custom: 'Custom', long: 'Long', short: 'Short', neutral: 'Neutral', scalp: 'Scalp', intraday: 'Intraday', swing: 'Swing', position: 'Position',
     idea_validation: 'Idea validation', initial_entry: 'Initial entry', position_building: 'Position building', holding: 'Holding', risk_reduction: 'Risk reduction', exit: 'Exit', price_action: 'Price action', economic_data: 'Economic data', news: 'News', earnings: 'Earnings', risk_event: 'Risk event', time_review: 'Scheduled review',
     planned_retry: 'Planned retry', new_signal: 'New signal', better_price: 'Better price', noise_stop: 'Noise stop', changed_setup: 'Changed setup', emotional: 'Emotional', target: 'Target', trailing_stop: 'Trailing stop', initial_stop: 'Initial stop',
@@ -382,7 +394,7 @@ const enumMessages = {
   },
   zh: {
     draft: '草稿', active: '进行中', planned: '已计划', paused: '已暂停', closed: '已结束', review_pending: '待复盘', reviewed: '已复盘', cancelled: '已取消', open: '持有中', scaling: '调整仓位中', pending: '待处理', voided: '已作废',
-    pre_trade: '交易前 · 可编辑', review: '结束 · 仅复盘',
+    pre_trade: '交易前 · 可编辑', ready_to_close: '已平仓 · 可结束', review: '结束 · 仅复盘',
     premarket: '盘前', opening: '开盘', morning: '上午', midday: '午间', power_hour: '尾盘时段', custom: '自定义', long: '做多', short: '做空', neutral: '中性', scalp: '超短线', intraday: '日内', swing: '波段', position: '中长线',
     idea_validation: '想法验证', initial_entry: '首次建仓', position_building: '逐步建仓', holding: '持有观察', risk_reduction: '降低风险', exit: '退出', price_action: '价格行为', economic_data: '经济数据', news: '新闻', earnings: '财报', risk_event: '风险事件', time_review: '定期复查',
     planned_retry: '计划内重试', new_signal: '出现新信号', better_price: '更优价格', noise_stop: '噪声止损', changed_setup: '策略条件改变', emotional: '情绪驱动', target: '达到目标', trailing_stop: '移动止损', initial_stop: '初始止损',
@@ -612,7 +624,17 @@ async function createCampaign(activate) {
   })
 }
 async function activateCampaign(item) { await runAction(async () => { await activateJournalCampaign(item.id); await loadToday() }) }
+async function pauseCampaign(item) { await runAction(async () => { await pauseJournalCampaign(item.id); await loadToday() }) }
+async function resumeCampaign(item) { await runAction(async () => { await resumeJournalCampaign(item.id); await loadToday() }) }
 async function closeCampaign(item) { await runAction(async () => { await closeJournalCampaign(item.id); await loadToday() }) }
+async function removeCampaign(item) {
+  if (!window.confirm(t('deleteCampaignConfirm'))) return
+  await runAction(async () => { await deleteJournalCampaign(item.id); await loadToday() })
+}
+async function removeAttempt(item) {
+  if (!window.confirm(t('deleteAttemptConfirm'))) return
+  await runAction(async () => { await deleteJournalAttempt(item.id); await loadToday() })
+}
 async function groupSelectedFills() {
   await runAction(async () => {
     await attachJournalFills(groupingCampaignId.value, {
@@ -757,7 +779,7 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .scenario-chips span { padding: 4px 7px; border-radius: 999px; background: #e6eeff; color: #2454b8; font-weight: 750; }
 .snapshot-summary code { justify-self: end; color: var(--tv-muted); font-size: 10px; }
 .attempt-list { display: grid; border-top: 1px solid var(--line); }
-.attempt-row { display: grid; grid-template-columns: 40px repeat(3, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid #edf1f7; font-size: 12px; }
+.attempt-row { display: grid; grid-template-columns: 40px repeat(3, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #edf1f7; font-size: 12px; }
 .decision-update-list { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .decision-update-row { display: grid; grid-template-columns: 120px 120px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px 10px; border-radius: 9px; background: #f7f9fd; font-size: 12px; }
 .decision-update-row > span:first-child { color: var(--tv-muted); }
@@ -769,11 +791,15 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .version-row:last-child { border-bottom: 0; }
 .version-row span { color: var(--tv-muted); }
 .correction-button { color: #8a5b05; }
+.delete-button { color: var(--negative); }
+.flow-hint { padding: 5px 8px; border-radius: 8px; background: #fff8e7; color: #8a5b05; font-size: 11px; font-weight: 750; }
 .correction-list { display: grid; gap: 6px; }
 .correction-row { display: grid; grid-template-columns: 180px minmax(0, 1fr) 120px; gap: 10px; padding: 8px 10px; border-radius: 9px; background: #fff8e7; color: #7c4a03; font-size: 11px; }
 .correction-row small { color: #9a6b18; text-align: right; }
 .correction-form { border-color: #f3d39b; background: #fffaf0; }
 .grouping-workspace { display: grid; gap: 14px; }
+.grouping-flow-guide { display: flex; gap: 7px; align-items: baseline; padding: 10px 12px; border-radius: 10px; background: #eef4ff; color: #2454b8; font-size: 12px; }
+.grouping-flow-guide span { color: #48658f; }
 .csv-import-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 12px; border: 1px dashed #b8c8e8; border-radius: 11px; background: #f8faff; }
 .csv-import-row > div { display: grid; gap: 3px; }
 .csv-import-row span { color: var(--tv-muted); font-size: 11px; }
@@ -813,7 +839,8 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
   .campaign-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grouping-controls { grid-template-columns: 1fr; }
   .snapshot-summary { grid-template-columns: 1fr; }
-  .decision-update-row, .version-row, .correction-row { grid-template-columns: 1fr; }
+  .decision-update-row, .version-row, .correction-row, .attempt-row { grid-template-columns: 1fr; }
   .correction-row small { text-align: left; }
+  .grouping-flow-guide { align-items: flex-start; flex-direction: column; }
 }
 </style>
