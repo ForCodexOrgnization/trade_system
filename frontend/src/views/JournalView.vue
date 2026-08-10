@@ -24,11 +24,6 @@
       </button>
     </div>
 
-    <div v-if="errorMessage" class="card journal-error">
-      <strong>{{ t('actionFailed') }}</strong>
-      <span>{{ errorMessage }}</span>
-      <button class="secondary small-btn" @click="errorMessage = ''">{{ t('dismiss') }}</button>
-    </div>
     <div v-if="loading" class="card">{{ t('loadingJournal') }}</div>
 
     <template v-else-if="activeTab === 'today'">
@@ -73,6 +68,7 @@
               <button :disabled="saving">{{ t('createContext') }}</button>
             </form>
 
+            <div class="context-card-grid">
             <div v-if="!contexts.length" class="card empty-row">{{ t('noContexts') }}</div>
             <article v-for="session in contexts" :key="session.id" :class="['card', 'session-card', { selected: selectedSessionId === session.id }]" @click="selectedSessionId = session.id">
               <div class="card-title-row">
@@ -86,6 +82,7 @@
                 <button class="secondary small-btn" @click.stop="openCampaignForm(session.id)">{{ t('newDecision') }}</button>
               </div>
             </article>
+            </div>
           </section>
 
           <section class="journal-main-column">
@@ -102,8 +99,8 @@
                 <label><span>{{ t('direction') }}</span><select v-model="campaignForm.direction"><option value="long">{{ enumLabel('long') }}</option><option value="short">{{ enumLabel('short') }}</option><option value="neutral">{{ enumLabel('neutral') }}</option></select></label>
                 <label><span>{{ t('horizon') }}</span><select v-model="campaignForm.horizon"><option v-for="item in availableHorizons" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
                 <label><span>{{ t('setup') }}</span><input v-model.trim="campaignForm.setup" required :placeholder="t('openingBreakout')" /></label>
-                <label><span>{{ t('riskAmount') }}</span><input v-model.number="campaignForm.planned_risk_amount" required type="number" min="0.01" step="1" /></label>
-                <label><span>{{ t('maxRiskR') }}</span><input v-model.number="campaignForm.max_risk_r" required type="number" min="0.1" step="0.25" /></label>
+                <label><span>{{ t('riskAmount') }}</span><input v-model.number="campaignForm.planned_risk_amount" required type="number" inputmode="decimal" min="0.01" step="0.01" /></label>
+                <label><span>{{ t('maxRiskR') }}</span><input v-model.number="campaignForm.max_risk_r" required type="number" inputmode="decimal" min="0.01" step="0.01" /></label>
                 <label><span>{{ t('maximumAttempts') }}</span><input v-model.number="campaignForm.max_attempts" required type="number" min="1" max="10" /></label>
               </div>
               <div class="journal-form-grid two-col">
@@ -169,7 +166,7 @@
               <details v-if="campaign.decision_versions?.length" class="version-history"><summary>{{ t('versionHistory') }} · {{ campaign.decision_versions.length }}</summary><div v-for="versionItem in campaign.decision_versions" :key="versionItem.id" class="version-row"><strong>v{{ versionItem.version_no }}</strong><span>{{ shortDateTime(versionItem.created_at) }}</span><span>{{ versionItem.change_note || t('initialVersion') }}</span></div></details>
               <div v-if="campaign.attempts.length" class="attempt-list">
                 <div v-for="attempt in campaign.attempts" :key="attempt.id" class="attempt-row">
-                  <strong>#{{ attempt.sequence_no }}</strong><span>{{ enumLabel(attempt.status) }}</span><span>{{ attempt.fills.length }} {{ t('fillsLower') }}</span><span :class="numberClass(attempt.result_r)">{{ number(attempt.result_r) }}R</span><button v-if="!attempt.fills.length" class="text-button delete-button" @click="removeAttempt(attempt)">{{ t('deleteEmptyAttempt') }}</button>
+                  <strong>#{{ attempt.sequence_no }}</strong><span>{{ enumLabel(attempt.status) }}</span><span>{{ attempt.fills.length }} {{ t('fillsLower') }}</span><span>{{ t('netPosition') }} <strong>{{ number(attempt.net_quantity) }}</strong></span><span :class="numberClass(attempt.result_r)">{{ number(attempt.result_r) }}R</span><button v-if="!attempt.fills.length" class="text-button delete-button" @click="removeAttempt(attempt)">{{ t('deleteEmptyAttempt') }}</button>
                 </div>
               </div>
               <div v-if="campaign.decision_updates?.length" class="decision-update-list">
@@ -177,22 +174,6 @@
                   <span>{{ shortDateTime(update.event_at) }}</span><strong>{{ update.position_stage ? enumLabel(update.position_stage) : t('decisionUpdate') }}</strong><span>{{ enumLabel(update.event_type) }} · {{ update.decision }}</span>
                 </div>
               </div>
-              <form v-if="decisionUpdateCampaign?.id === campaign.id" class="decision-update-form" @submit.prevent="submitDecisionUpdate">
-                <div class="journal-form-grid three-col">
-                  <label v-if="campaign.context_kind === 'swing'"><span>{{ t('positionStage') }}</span><select v-model="decisionUpdateForm.position_stage"><option v-for="item in positionStages" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
-                  <label><span>{{ t('eventType') }}</span><select v-model="decisionUpdateForm.event_type"><option v-for="item in eventTypes" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
-                  <label><span>{{ t('eventTime') }}</span><input v-model="decisionUpdateForm.event_at" type="datetime-local" required /></label>
-                </div>
-                <div class="journal-form-grid two-col">
-                  <label><span>{{ t('observedEvidence') }}</span><input v-model.trim="decisionUpdateForm.observed_evidence_text" required :placeholder="t('evidencePlaceholder')" /></label>
-                  <label><span>{{ t('interpretation') }}</span><input v-model.trim="decisionUpdateForm.interpretation" required /></label>
-                  <label><span>{{ t('updatedDecision') }}</span><input v-model.trim="decisionUpdateForm.decision" required :placeholder="t('updatedDecisionPlaceholder')" /></label>
-                  <label><span>{{ t('riskChange') }}</span><input v-model.trim="decisionUpdateForm.risk_change" :placeholder="t('riskChangePlaceholder')" /></label>
-                  <label><span>{{ t('invalidationUpdate') }}</span><input v-model.trim="decisionUpdateForm.invalidation_update" /></label>
-                  <label><span>{{ t('nextReview') }}</span><input v-model="decisionUpdateForm.next_review_at" type="datetime-local" /></label>
-                </div>
-                <div class="builder-actions"><button type="button" class="secondary" @click="decisionUpdateCampaign = null">{{ t('cancel') }}</button><button :disabled="saving">{{ t('saveDecisionUpdate') }}</button></div>
-              </form>
               <div v-if="campaign.corrections?.length" class="correction-list"><div v-for="item in campaign.corrections" :key="item.id" class="correction-row"><strong>{{ t('correction') }} · {{ item.field_name }}</strong><span>{{ item.reason }}</span><small>{{ shortDateTime(item.created_at) }}</small></div></div>
               <form v-if="correctionCampaign?.id === campaign.id" class="decision-update-form correction-form" @submit.prevent="submitCorrection">
                 <div class="journal-form-grid three-col">
@@ -211,27 +192,35 @@
         <section class="card grouping-workspace">
           <div class="column-heading"><div><div class="section-title">{{ t('fillGrouping') }}</div><span class="muted-copy">{{ t('fillGroupingHelp') }}</span></div><span class="badge">{{ selectedFillIds.length }} {{ t('selected') }}</span></div>
           <div class="grouping-flow-guide"><strong>{{ t('groupingNextStep') }}</strong><span>{{ t('groupingNextStepHelp') }}</span></div>
+          <div v-if="groupingError" class="grouping-error" role="alert"><strong>{{ t('groupingFailed') }}</strong><span>{{ groupingError }}</span><button class="secondary small-btn" @click="groupingError = ''; errorMessage = ''">{{ t('dismiss') }}</button></div>
+          <div v-if="groupingResult" :class="['grouping-result', groupingResult.status === 'closed' ? 'complete' : 'open']">
+            <div><strong>✓ {{ t('groupingSucceeded') }}</strong><span>{{ groupingResult.symbol }} · {{ t('attempt') }} #{{ groupingResult.sequenceNo }} · {{ groupingResult.fillCount }} {{ t('fillsLower') }}</span></div>
+            <div class="grouping-result-metrics"><span>{{ t('netPosition') }} <strong>{{ number(groupingResult.netQuantity) }}</strong></span><span>{{ t('attemptStatus') }} <strong>{{ enumLabel(groupingResult.status) }}</strong></span></div>
+            <p>{{ groupingResult.status === 'closed' ? t('groupingClosedNext') : t('groupingOpenNext') }}</p>
+            <button class="secondary small-btn" @click="groupingResult = null">{{ t('dismiss') }}</button>
+          </div>
           <div class="csv-import-row">
             <div><strong>{{ t('csvImport') }}</strong><span>{{ t('csvImportHelp') }}</span></div>
             <label class="csv-file-picker"><span>{{ t('chooseCsv') }}</span><input type="file" accept=".csv,text/csv" @change="importCsv" /></label>
           </div>
           <div class="grouping-controls">
-            <label><span>{{ t('targetCampaign') }}</span><select v-model="groupingCampaignId"><option value="">{{ t('selectCampaign') }}</option><option v-for="item in todayCampaigns" :key="item.id" :value="item.id">{{ item.symbol }} · {{ item.setup }}</option></select></label>
+            <label><span>{{ t('targetCampaign') }}</span><select v-model="groupingCampaignId" @change="syncGroupingAttemptTarget"><option value="">{{ t('selectCampaign') }}</option><option v-for="item in todayCampaigns" :key="item.id" :value="item.id">{{ item.symbol }} · {{ item.setup }}</option></select></label>
             <label><span>{{ t('targetAttempt') }}</span><select v-model="groupingAttemptId"><option value="">{{ t('createNewAttempt') }}</option><option v-for="item in groupingAttempts" :key="item.id" :value="item.id">{{ t('attempt') }} #{{ item.sequence_no }}</option></select></label>
             <label v-if="!groupingAttemptId"><span>{{ t('reentryReason') }}</span><select v-model="groupingForm.reentry_reason"><option value="">{{ t('firstEntry') }}</option><option v-for="item in reentryReasons" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
             <label v-if="!groupingAttemptId"><span>{{ t('whatChanged') }}</span><input v-model.trim="groupingForm.what_changed" :placeholder="t('reentryRequired')" /></label>
             <button :disabled="!groupingCampaignId || !selectedFillIds.length || saving" @click="groupSelectedFills">{{ t('applyGrouping') }}</button>
             <button class="secondary" :disabled="!groupingCampaignId || saving" @click="undoGrouping">{{ t('undoGrouping') }}</button>
           </div>
+          <div class="fill-view-tabs"><button v-for="item in ['ungrouped', 'grouped', 'all']" :key="item" :class="['secondary', 'small-btn', { active: fillView === item }]" @click="fillView = item">{{ t(`${item}Fills`) }}</button></div>
           <div class="tv-table-wrap">
             <table class="trade-table compact-fill-table">
               <thead><tr><th></th><th>{{ t('time') }}</th><th>{{ t('symbol') }}</th><th>{{ t('side') }}</th><th>{{ t('qty') }}</th><th>{{ t('price') }}</th><th>{{ t('currentGroup') }}</th></tr></thead>
               <tbody>
-                <tr v-for="fill in allDayFills" :key="fill.id">
+                <tr v-for="fill in displayedDayFills" :key="fill.id">
                   <td><input v-model="selectedFillIds" type="checkbox" :value="fill.id" /></td>
                   <td>{{ shortTime(fill.executed_at) }}</td><td>{{ fill.symbol }}</td><td>{{ enumLabel(fill.side) }}</td><td>{{ number(fill.quantity) }}</td><td>{{ number(fill.price) }}</td><td>{{ fill.location }}</td>
                 </tr>
-                <tr v-if="!allDayFills.length"><td colspan="7" class="empty-row">{{ t('noFills') }}</td></tr>
+                <tr v-if="!displayedDayFills.length"><td colspan="7" class="empty-row">{{ fillView === 'ungrouped' ? t('noUngroupedFills') : t('noFills') }}</td></tr>
               </tbody>
             </table>
           </div>
@@ -290,6 +279,32 @@
         <div v-if="analytics.sample_size < 20" class="card sample-warning">{{ t('sampleWarning') }}</div>
       </template>
     </template>
+
+    <Teleport to="body">
+      <div v-if="errorMessage" class="journal-toast" role="alert">
+        <div><strong>{{ t('actionFailed') }}</strong><span>{{ errorMessage }}</span></div>
+        <button class="secondary small-btn" @click="errorMessage = ''; groupingError = ''">{{ t('dismiss') }}</button>
+      </div>
+      <div v-if="decisionUpdateCampaign" class="journal-modal-backdrop" @click.self="decisionUpdateCampaign = null">
+        <form class="journal-modal card decision-update-form" @submit.prevent="submitDecisionUpdate">
+          <div class="builder-head"><div><strong>{{ t('decisionUpdate') }} · {{ decisionUpdateCampaign.symbol }}</strong><span>{{ t('decisionUpdateModalHelp') }}</span></div><button type="button" class="secondary small-btn" @click="decisionUpdateCampaign = null">{{ t('close') }}</button></div>
+          <div class="journal-form-grid three-col">
+            <label v-if="decisionUpdateCampaign.context_kind === 'swing'"><span>{{ t('positionStage') }}</span><select v-model="decisionUpdateForm.position_stage"><option v-for="item in positionStages" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+            <label><span>{{ t('eventType') }}</span><select v-model="decisionUpdateForm.event_type"><option v-for="item in eventTypes" :key="item" :value="item">{{ enumLabel(item) }}</option></select></label>
+            <label><span>{{ t('eventTime') }}</span><input v-model="decisionUpdateForm.event_at" type="datetime-local" required /></label>
+          </div>
+          <div class="journal-form-grid two-col">
+            <label><span>{{ t('observedEvidence') }}</span><input v-model.trim="decisionUpdateForm.observed_evidence_text" required :placeholder="t('evidencePlaceholder')" /></label>
+            <label><span>{{ t('interpretation') }}</span><input v-model.trim="decisionUpdateForm.interpretation" required /></label>
+            <label><span>{{ t('updatedDecision') }}</span><input v-model.trim="decisionUpdateForm.decision" required :placeholder="t('updatedDecisionPlaceholder')" /></label>
+            <label><span>{{ t('riskChange') }}</span><input v-model.trim="decisionUpdateForm.risk_change" :placeholder="t('riskChangePlaceholder')" /></label>
+            <label><span>{{ t('invalidationUpdate') }}</span><input v-model.trim="decisionUpdateForm.invalidation_update" /></label>
+            <label><span>{{ t('nextReview') }}</span><input v-model="decisionUpdateForm.next_review_at" type="datetime-local" /></label>
+          </div>
+          <div class="builder-actions"><button type="button" class="secondary" @click="decisionUpdateCampaign = null">{{ t('cancel') }}</button><button :disabled="saving">{{ t('saveDecisionUpdate') }}</button></div>
+        </form>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -346,7 +361,9 @@ const messages = {
     oneLesson: 'One lesson', lessonPlaceholder: 'One concrete change for the next similar decision', submitReview: 'Submit review', allStatuses: 'All statuses', originalSnapshot: 'Original snapshot', decision: 'Decision grade',
     plannedAvgR: 'Planned avg R', unplannedAvgR: 'Unplanned avg R', setupEdge: 'Setup edge', attemptSequence: 'Attempt sequence', sessionPerformance: 'Session performance', sampleSize: 'Sample size', avgR: 'Avg R',
     loadingAnalytics: 'Loading analytics…', sampleWarning: 'Small sample: use these results as questions to investigate, not proof of an edge.', baseCase: 'Base case', failureCase: 'Failure case', alternativeCase: 'Alternative case',
-    ungrouped: 'Ungrouped', chooseCsv: 'Choose CSV file', no: 'No', yes: 'Yes',
+    ungrouped: 'Ungrouped', chooseCsv: 'Choose CSV file', no: 'No', yes: 'Yes', decisionUpdateModalHelp: 'Append a new observation and action without rewriting the locked original decision.',
+    groupingSucceeded: 'Grouping applied', netPosition: 'Net position', attemptStatus: 'Attempt status', groupingClosedNext: 'Net position is zero. You can end the decision and continue to review.', groupingOpenNext: 'This attempt still has an open position. The next closing fill will stay targeted to this attempt.',
+    ungroupedFills: 'Ungrouped', groupedFills: 'Grouped', allFills: 'All fills', noUngroupedFills: 'No ungrouped fills. Switch to Grouped to review completed assignments.', groupingFailed: 'Grouping was not applied',
   },
   zh: {
     language: '语言', decisionLifecycle: '决策生命周期', journalTitle: '交易日志', journalSubtitle: '先保存当时的判断，再让成交、结果与复盘成为可审计的证据。',
@@ -379,7 +396,9 @@ const messages = {
     unclear: '不明确', decisionGrade: '决策评分', executionGrade: '执行评分', entryFollowed: '入场是否遵守计划', managementFollowed: '持仓管理是否遵守计划', exitFollowed: '退出是否遵守计划', outcomeDrivers: '结果驱动因素（最多 2 个）',
     knowableThen: '当时可知的信息', luckVariance: '运气 / 随机性', processChange: '流程改进', counterCase: '反方理由', wouldRepeat: '是否愿意重复该决策？', oneLesson: '一条经验', lessonPlaceholder: '下一次相似决策要做的一项具体改变', submitReview: '提交复盘',
     allStatuses: '全部状态', originalSnapshot: '原始决策快照', decision: '决策评分', plannedAvgR: '按计划交易平均 R', unplannedAvgR: '未按计划交易平均 R', setupEdge: '策略表现', attemptSequence: '尝试序列表现', sessionPerformance: '时段表现', sampleSize: '样本量', avgR: '平均 R',
-    loadingAnalytics: '正在加载统计…', sampleWarning: '当前样本较少：请把结果当作需要验证的问题，而不是策略有效性的证明。', baseCase: '基准情景', failureCase: '失败情景', alternativeCase: '其他情景', ungrouped: '未归组', chooseCsv: '选择 CSV 文件', no: '否', yes: '是',
+    loadingAnalytics: '正在加载统计…', sampleWarning: '当前样本较少：请把结果当作需要验证的问题，而不是策略有效性的证明。', baseCase: '基准情景', failureCase: '失败情景', alternativeCase: '其他情景', ungrouped: '未归组', chooseCsv: '选择 CSV 文件', no: '否', yes: '是', decisionUpdateModalHelp: '只追加新的观察和行动，不改写已锁定的原始决策。',
+    groupingSucceeded: '成交归组成功', netPosition: '净仓位', attemptStatus: '尝试状态', groupingClosedNext: '净仓位已经归零，可以结束决策并进入复盘。', groupingOpenNext: '该尝试仍有持仓；下一笔平仓成交会继续默认归入这个尝试。',
+    ungroupedFills: '待归组', groupedFills: '已归组', allFills: '全部成交', noUngroupedFills: '没有待归组成交；可切换到“已归组”查看归组结果。', groupingFailed: '成交归组未完成',
   },
 }
 
@@ -459,6 +478,9 @@ const editingCampaignId = ref('')
 const selectedFillIds = ref([])
 const groupingCampaignId = ref('')
 const groupingAttemptId = ref('')
+const groupingResult = ref(null)
+const groupingError = ref('')
+const fillView = ref('ungrouped')
 const reviewCampaign = ref(null)
 const decisionUpdateCampaign = ref(null)
 const correctionCampaign = ref(null)
@@ -495,14 +517,15 @@ const groupingAttempts = computed(() => groupingCampaign.value?.attempts || [])
 const selectedCampaignContext = computed(() => contexts.value.find((item) => item.id === campaignForm.context))
 const availableHorizons = computed(() => selectedCampaignContext.value?.context_kind === 'swing' ? ['swing', 'position'] : ['scalp', 'intraday'])
 const allDayFills = computed(() => {
-  const rows = ungroupedFills.value.map((fill) => ({ ...fill, location: t('ungrouped') }))
+  const rows = ungroupedFills.value.map((fill) => ({ ...fill, location: t('ungrouped'), grouped: false }))
   for (const campaign of todayCampaigns.value) {
     for (const attempt of campaign.attempts || []) {
-      for (const fill of attempt.fills || []) rows.push({ ...fill, location: `${campaign.symbol} · ${t('attempt')} #${attempt.sequence_no}` })
+      for (const fill of attempt.fills || []) rows.push({ ...fill, location: `${campaign.symbol} · ${t('attempt')} #${attempt.sequence_no}`, grouped: true })
     }
   }
   return rows.sort((a, b) => new Date(a.executed_at) - new Date(b.executed_at))
 })
+const displayedDayFills = computed(() => fillView.value === 'ungrouped' ? allDayFills.value.filter((item) => !item.grouped) : fillView.value === 'grouped' ? allDayFills.value.filter((item) => item.grouped) : allDayFills.value)
 const filteredCampaignHistory = computed(() => decisionStatusFilter.value ? campaignHistory.value.filter((item) => item.status === decisionStatusFilter.value) : campaignHistory.value)
 
 function number(value) { return formatNumber(value ?? 0) }
@@ -522,9 +545,14 @@ function readError(err) {
   if (data) return Object.entries(data).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`).join(' · ')
   return err?.message || 'Unknown error'
 }
-async function runAction(fn) {
+async function runAction(fn, onError = null) {
   saving.value = true; errorMessage.value = ''
-  try { await fn() } catch (err) { errorMessage.value = readError(err) } finally { saving.value = false }
+  try { await fn(); return true } catch (err) {
+    const message = readError(err)
+    errorMessage.value = message
+    if (onError) onError(message)
+    return false
+  } finally { saving.value = false }
 }
 
 async function loadToday() {
@@ -536,6 +564,7 @@ async function loadToday() {
     const swingRes = await fetchJournalContexts({ context_kind: 'swing' })
     swingContexts.value = responseRows(swingRes.data).filter((item) => !['closed', 'reviewed'].includes(item.status))
     if (contexts.value.length && !contexts.value.some((item) => item.id === selectedSessionId.value)) selectedSessionId.value = contexts.value[0].id
+    if (groupingCampaignId.value && !groupingAttemptId.value) syncGroupingAttemptTarget()
   } catch (err) { errorMessage.value = readError(err) } finally { loading.value = false }
 }
 async function loadHistory() { const res = await fetchJournalCampaigns(); campaignHistory.value = responseRows(res.data) }
@@ -636,14 +665,30 @@ async function removeAttempt(item) {
   await runAction(async () => { await deleteJournalAttempt(item.id); await loadToday() })
 }
 async function groupSelectedFills() {
+  groupingError.value = ''
   await runAction(async () => {
-    await attachJournalFills(groupingCampaignId.value, {
+    const selectedIds = [...selectedFillIds.value]
+    const res = await attachJournalFills(groupingCampaignId.value, {
       fill_ids: selectedFillIds.value, attempt_id: groupingAttemptId.value || null,
       reentry_reason: groupingForm.reentry_reason, what_changed: groupingForm.what_changed,
       was_planned: groupingForm.was_planned,
     })
-    selectedFillIds.value = []; groupingAttemptId.value = ''; groupingForm.reentry_reason = ''; groupingForm.what_changed = ''; await loadToday()
-  })
+    const affectedAttempt = (res.data.attempts || []).find((attempt) => attempt.fills.some((fill) => selectedIds.includes(fill.id)))
+    groupingResult.value = affectedAttempt ? {
+      campaignId: res.data.id, symbol: res.data.symbol, setup: res.data.setup,
+      attemptId: affectedAttempt.id, sequenceNo: affectedAttempt.sequence_no, status: affectedAttempt.status,
+      fillCount: affectedAttempt.fills.length, netQuantity: affectedAttempt.net_quantity,
+    } : null
+    selectedFillIds.value = []
+    groupingAttemptId.value = affectedAttempt && ['open', 'scaling'].includes(affectedAttempt.status) ? affectedAttempt.id : ''
+    groupingForm.reentry_reason = ''; groupingForm.what_changed = ''
+    fillView.value = 'ungrouped'
+    await loadToday()
+  }, (message) => { groupingError.value = message })
+}
+function syncGroupingAttemptTarget() {
+  const openAttempts = groupingAttempts.value.filter((item) => ['open', 'scaling'].includes(item.status))
+  groupingAttemptId.value = openAttempts.length === 1 ? openAttempts[0].id : ''
 }
 async function importCsv(event) {
   const file = event.target.files?.[0]
@@ -730,6 +775,9 @@ onMounted(loadToday)
 .journal-tabs { display: flex; gap: 8px; padding: 8px; width: fit-content; }
 .journal-error { display: flex; align-items: center; gap: 12px; color: var(--negative); border-color: #fecaca; }
 .journal-error span { flex: 1; }
+.journal-toast { position: fixed; right: 24px; bottom: 24px; z-index: 2200; display: flex; align-items: center; gap: 16px; width: min(520px, calc(100vw - 48px)); padding: 14px 16px; border: 1px solid #fca5a5; border-radius: 12px; background: #fff; color: var(--negative); box-shadow: 0 18px 50px rgba(127, 29, 29, .22); }
+.journal-toast > div { display: grid; gap: 3px; flex: 1; }
+.journal-toast span { color: #7f1d1d; font-size: 12px; }
 .journal-empty-state { display: grid; gap: 18px; }
 .journal-risk-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .risk-cell { display: grid; gap: 7px; padding: 14px 16px; }
@@ -737,8 +785,9 @@ onMounted(loadToday)
 .risk-cell strong { font-size: 18px; }
 .positive-value { color: var(--positive); }
 .negative-value { color: var(--negative); }
-.journal-workspace-grid { display: grid; grid-template-columns: minmax(270px, .75fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.journal-workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .journal-column, .journal-main-column { display: grid; gap: 12px; }
+.context-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .column-heading, .card-title-row, .campaign-card-top, .builder-head, .scenario-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .column-heading .section-title { margin-bottom: 2px; }
 .inline-journal-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -779,12 +828,14 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .scenario-chips span { padding: 4px 7px; border-radius: 999px; background: #e6eeff; color: #2454b8; font-weight: 750; }
 .snapshot-summary code { justify-self: end; color: var(--tv-muted); font-size: 10px; }
 .attempt-list { display: grid; border-top: 1px solid var(--line); }
-.attempt-row { display: grid; grid-template-columns: 40px repeat(3, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #edf1f7; font-size: 12px; }
+.attempt-row { display: grid; grid-template-columns: 40px repeat(4, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #edf1f7; font-size: 12px; }
 .decision-update-list { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .decision-update-row { display: grid; grid-template-columns: 120px 120px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px 10px; border-radius: 9px; background: #f7f9fd; font-size: 12px; }
 .decision-update-row > span:first-child { color: var(--tv-muted); }
 .decision-update-form { display: grid; gap: 12px; padding: 13px; border: 1px solid #b8c8e8; border-radius: 11px; background: #f8faff; }
 .decision-update-form label { display: grid; gap: 5px; }
+.journal-modal-backdrop { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 42, .55); backdrop-filter: blur(2px); }
+.journal-modal { width: min(900px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 20px; box-shadow: 0 24px 70px rgba(15, 23, 42, .28); }
 .version-history { padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfe; }
 .version-history summary { cursor: pointer; color: #2454b8; font-size: 12px; font-weight: 750; }
 .version-row { display: grid; grid-template-columns: 42px 135px minmax(0, 1fr); gap: 8px; padding: 7px 0; border-bottom: 1px solid #edf1f7; font-size: 11px; }
@@ -800,6 +851,17 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
 .grouping-workspace { display: grid; gap: 14px; }
 .grouping-flow-guide { display: flex; gap: 7px; align-items: baseline; padding: 10px 12px; border-radius: 10px; background: #eef4ff; color: #2454b8; font-size: 12px; }
 .grouping-flow-guide span { color: #48658f; }
+.grouping-error { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #fca5a5; border-radius: 11px; background: #fff1f2; color: #b91c1c; }
+.grouping-error span { flex: 1; font-size: 12px; }
+.grouping-result { display: grid; grid-template-columns: 1.2fr 1fr minmax(220px, 1.5fr) auto; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid #b8c8e8; border-radius: 11px; background: #f4f8ff; }
+.grouping-result.complete { border-color: #a7d8bd; background: #f0faf4; }
+.grouping-result > div:first-child { display: grid; gap: 3px; }
+.grouping-result > div:first-child span, .grouping-result p { margin: 0; color: var(--tv-muted); font-size: 11px; }
+.grouping-result-metrics { display: flex; gap: 14px; flex-wrap: wrap; }
+.grouping-result-metrics span { display: grid; gap: 2px; color: var(--tv-muted); font-size: 10px; }
+.grouping-result-metrics strong { color: var(--tv-text); font-size: 13px; }
+.fill-view-tabs { display: flex; gap: 6px; }
+.fill-view-tabs button.active { border-color: #2563eb; background: #e9f0ff; color: #2454b8; }
 .csv-import-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 12px; border: 1px dashed #b8c8e8; border-radius: 11px; background: #f8faff; }
 .csv-import-row > div { display: grid; gap: 3px; }
 .csv-import-row span { color: var(--tv-muted); font-size: 11px; }
@@ -829,6 +891,7 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
   .journal-risk-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .journal-workspace-grid { grid-template-columns: 1fr; }
   .grouping-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grouping-result { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analytics-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
@@ -838,6 +901,11 @@ label span { color: var(--tv-muted); font-size: 11px; font-weight: 750; }
   .journal-risk-strip, .analytics-summary, .journal-form-grid.two-col, .journal-form-grid.three-col, .journal-form-grid.four-col, .scenario-grid, .decision-history-grid { grid-template-columns: 1fr; }
   .campaign-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grouping-controls { grid-template-columns: 1fr; }
+  .grouping-result { grid-template-columns: 1fr; }
+  .journal-modal-backdrop { padding: 12px; }
+  .journal-modal { max-height: calc(100vh - 24px); padding: 14px; }
+  .journal-toast { right: 12px; bottom: 12px; width: calc(100vw - 24px); }
+  .grouping-error { align-items: flex-start; flex-direction: column; }
   .snapshot-summary { grid-template-columns: 1fr; }
   .decision-update-row, .version-row, .correction-row, .attempt-row { grid-template-columns: 1fr; }
   .correction-row small { text-align: left; }

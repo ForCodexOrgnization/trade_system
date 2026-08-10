@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from datetime import datetime
 from decimal import Decimal
 
@@ -49,6 +50,7 @@ from .serializers import (
 
 
 ZERO = Decimal("0")
+FUTURES_CONTRACT_PATTERN = re.compile(r"^(.+?)[FGHJKMNQUVXZ]\d{1,4}$")
 
 
 def _decimal(value):
@@ -57,6 +59,19 @@ def _decimal(value):
 
 def _campaign_account(campaign):
     return campaign.account
+
+
+def _symbols_compatible(campaign_symbol, fill_symbol):
+    campaign_value = str(campaign_symbol or "").strip().upper()
+    fill_value = str(fill_symbol or "").strip().upper()
+    if campaign_value == fill_value:
+        return True
+    campaign_contract = FUTURES_CONTRACT_PATTERN.fullmatch(campaign_value)
+    fill_contract = FUTURES_CONTRACT_PATTERN.fullmatch(fill_value)
+    return bool(
+        (fill_contract and not campaign_contract and fill_contract.group(1) == campaign_value)
+        or (campaign_contract and not fill_contract and campaign_contract.group(1) == fill_value)
+    )
 
 
 def _audit(account, aggregate, event_type, payload=None):
@@ -456,8 +471,8 @@ class CampaignViewSet(AccountScopedViewSet):
         ).select_related("raw_execution"))
         if len(fills) != len(set(map(int, fill_ids))):
             raise ValidationError({"fill_ids": "One or more fills are unavailable for this account."})
-        if any(item.symbol.upper() != campaign.symbol.upper() for item in fills):
-            raise ValidationError({"fill_ids": "All fills must match the campaign symbol."})
+        if any(not _symbols_compatible(campaign.symbol, item.symbol) for item in fills):
+            raise ValidationError({"fill_ids": "All fills must match the campaign symbol or its futures root."})
         attempt_id = request.data.get("attempt_id")
         with transaction.atomic():
             _lock_original_decision(campaign)

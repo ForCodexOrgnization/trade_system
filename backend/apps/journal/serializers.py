@@ -55,25 +55,31 @@ class FillSummarySerializer(serializers.Serializer):
     quantity = serializers.DecimalField(max_digits=20, decimal_places=6)
     price = serializers.DecimalField(max_digits=20, decimal_places=8)
     commission = serializers.DecimalField(max_digits=20, decimal_places=8)
+    signed_qty = serializers.DecimalField(max_digits=20, decimal_places=6)
     executed_at = serializers.DateTimeField()
     trade_day = serializers.DateField()
 
 
 class AttemptSerializer(serializers.ModelSerializer):
     fills = serializers.SerializerMethodField()
+    net_quantity = serializers.SerializerMethodField()
 
     class Meta:
         model = Attempt
         fields = [
             "id", "campaign", "sequence_no", "status", "entry_at", "exit_at", "planned_risk_r",
             "actual_risk_r", "result_r", "realized_pnl", "reentry_reason", "what_changed",
-            "was_planned", "fills", "created_at", "updated_at",
+            "was_planned", "fills", "net_quantity", "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "sequence_no", "status", "entry_at", "exit_at", "result_r", "realized_pnl", "fills", "created_at", "updated_at"]
+        read_only_fields = ["id", "sequence_no", "status", "entry_at", "exit_at", "result_r", "realized_pnl", "fills", "net_quantity", "created_at", "updated_at"]
 
     def get_fills(self, obj):
         rows = [link.fill for link in obj.fill_links.select_related("fill").all()]
         return FillSummarySerializer(rows, many=True).data
+
+    def get_net_quantity(self, obj):
+        rows = [link.fill for link in obj.fill_links.select_related("fill").all()]
+        return sum((item.signed_qty for item in rows), Decimal("0"))
 
 
 class CampaignReviewSerializer(serializers.ModelSerializer):

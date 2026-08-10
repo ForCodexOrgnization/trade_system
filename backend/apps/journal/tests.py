@@ -202,6 +202,21 @@ class JournalMVPTests(TestCase):
         self.assertEqual(reviewed.data["status"], "reviewed")
         self.assertEqual(reviewed.data["review"]["decision_grade"], "A")
 
+    def test_futures_root_campaign_accepts_dated_contract_fill(self):
+        self.campaign.symbol = "MCL"
+        self.campaign.save(update_fields=["symbol", "updated_at"])
+        self.assertEqual(self.create_version().status_code, 201)
+        fill = self.create_fill("mcl-root-entry", "BUY", "1", "0", 7, symbol="MCLU6")
+
+        grouped = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [fill.id]},
+            format="json",
+        )
+
+        self.assertEqual(grouped.status_code, 200)
+        self.assertEqual(grouped.data["attempts"][0]["fills"][0]["symbol"], "MCLU6")
+
     def test_csv_import_is_idempotent(self):
         content = (
             "execution_id,symbol,side,quantity,price,commission,realized_pnl,executed_at,sec_type\n"
@@ -308,6 +323,7 @@ class JournalMVPTests(TestCase):
         self.assertEqual(grouped.status_code, 200)
         self.assertTrue(grouped.data["lifecycle"]["has_open_position"])
         self.assertFalse(grouped.data["lifecycle"]["can_close"])
+        self.assertEqual(grouped.data["attempts"][0]["net_quantity"], 1)
         empty_attempt = Attempt.objects.create(campaign=self.campaign, sequence_no=2)
         removed_attempt = self.client.delete(f"/api/journal/attempts/{empty_attempt.id}/?account=DU-JOURNAL")
         self.assertEqual(removed_attempt.status_code, 200)
@@ -323,3 +339,4 @@ class JournalMVPTests(TestCase):
         )
         self.assertFalse(closed_attempt.data["lifecycle"]["has_open_position"])
         self.assertTrue(closed_attempt.data["lifecycle"]["can_close"])
+        self.assertEqual(closed_attempt.data["attempts"][0]["net_quantity"], 0)
