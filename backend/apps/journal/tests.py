@@ -92,7 +92,7 @@ class JournalMVPTests(TestCase):
             trade_day="2026-08-06",
         )
 
-    def test_snapshot_requires_two_or_three_scenarios_totaling_about_100(self):
+    def test_snapshot_requires_scenario_probabilities_totaling_about_100(self):
         response = self.client.post(
             f"/api/journal/campaigns/{self.campaign.id}/decision-versions/?account=DU-JOURNAL",
             self.snapshot_payload((80, 40)),
@@ -101,6 +101,18 @@ class JournalMVPTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertFalse(DecisionSnapshot.objects.filter(campaign=self.campaign).exists())
+
+    def test_snapshot_accepts_two_to_six_simplified_scenarios(self):
+        payload = self.snapshot_payload()
+        payload["scenarios"] = [
+            {"name": f"Outcome {index}", "probability": 25, "planned_action": f"Action {index}"}
+            for index in range(1, 5)
+        ]
+
+        response = self.create_version(payload)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(response.data["current_decision"]["scenarios"]), 4)
 
     def test_pretrade_versions_then_first_fill_locks_original_decision(self):
         first = self.create_version()
@@ -114,6 +126,14 @@ class JournalMVPTests(TestCase):
         self.assertFalse(DecisionSnapshot.objects.filter(campaign=self.campaign).exists())
 
         fill = self.create_fill("lock-entry", "BUY", "1", "0", 0)
+        blocked = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [fill.id], "planned_risk_r": 1},
+            format="json",
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn("Confirm the plan", blocked.data["detail"])
+        self.assertEqual(self.client.post(f"/api/journal/campaigns/{self.campaign.id}/activate/?account=DU-JOURNAL").status_code, 200)
         grouped = self.client.post(
             f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
             {"fill_ids": [fill.id], "planned_risk_r": 1},
@@ -206,6 +226,7 @@ class JournalMVPTests(TestCase):
         self.campaign.symbol = "MCL"
         self.campaign.save(update_fields=["symbol", "updated_at"])
         self.assertEqual(self.create_version().status_code, 201)
+        self.assertEqual(self.client.post(f"/api/journal/campaigns/{self.campaign.id}/activate/?account=DU-JOURNAL").status_code, 200)
         fill = self.create_fill("mcl-root-entry", "BUY", "1", "0", 7, symbol="MCLU6")
 
         grouped = self.client.post(
@@ -216,6 +237,37 @@ class JournalMVPTests(TestCase):
 
         self.assertEqual(grouped.status_code, 200)
         self.assertEqual(grouped.data["attempts"][0]["fills"][0]["symbol"], "MCLU6")
+
+    def test_grouping_auto_targets_open_attempt_and_prompts_only_for_reentry(self):
+        self.assertEqual(self.create_version().status_code, 201)
+        self.assertEqual(self.client.post(f"/api/journal/campaigns/{self.campaign.id}/activate/?account=DU-JOURNAL").status_code, 200)
+        buy = self.create_fill("auto-buy", "BUY", "1", "0", 8)
+        sell = self.create_fill("auto-sell", "SELL", "-1", "10", 9)
+        reentry = self.create_fill("auto-reentry", "BUY", "1", "0", 10)
+
+        opened = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [buy.id]}, format="json",
+        )
+        closed = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [sell.id]}, format="json",
+        )
+        missing_reason = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [reentry.id]}, format="json",
+        )
+        reopened = self.client.post(
+            f"/api/journal/campaigns/{self.campaign.id}/attach-fills/?account=DU-JOURNAL",
+            {"fill_ids": [reentry.id], "reentry_reason": "new_signal", "what_changed": "VWAP reclaimed again."}, format="json",
+        )
+
+        self.assertEqual(opened.data["attempts"][0]["status"], "open")
+        self.assertEqual(closed.data["attempts"][0]["status"], "closed")
+        self.assertEqual(missing_reason.status_code, 400)
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.data["attempts"][1]["sequence_no"], 2)
+        self.assertEqual(reopened.data["attempts"][1]["reentry_reason"], "new_signal")
 
     def test_csv_import_is_idempotent(self):
         content = (

@@ -181,8 +181,8 @@ class CampaignSerializer(serializers.ModelSerializer):
                 missing.append(field)
         scenarios = list(snapshot.scenarios.all()) if snapshot else version.scenarios
         total = sum((item.probability for item in scenarios), Decimal("0")) if snapshot else sum((Decimal(str(item.get("probability") or 0)) for item in scenarios), Decimal("0"))
-        if len(scenarios) not in (2, 3):
-            missing.append("2_to_3_scenarios")
+        if not 2 <= len(scenarios) <= 6:
+            missing.append("2_to_6_scenarios")
         if not Decimal("99") <= total <= Decimal("101"):
             missing.append("scenario_probability_total")
         score = max(0, 100 - len(missing) * 20)

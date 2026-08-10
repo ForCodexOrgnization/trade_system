@@ -86,8 +86,8 @@ def _audit(account, aggregate, event_type, payload=None):
 
 def _validated_scenarios(data):
     scenarios = data.get("scenarios") or []
-    if len(scenarios) not in (2, 3):
-        raise ValidationError({"scenarios": "Exactly 2 or 3 scenarios are required."})
+    if not 2 <= len(scenarios) <= 6:
+        raise ValidationError({"scenarios": "Between 2 and 6 scenarios are required."})
     probabilities = [_decimal(item.get("probability")) for item in scenarios]
     total = sum(probabilities, ZERO)
     if not Decimal("99") <= total <= Decimal("101"):
@@ -97,12 +97,12 @@ def _validated_scenarios(data):
         probability = probabilities[index]
         if not Decimal("1") <= probability <= Decimal("99"):
             raise ValidationError({"scenarios": "Each probability must be between 1 and 99."})
-        for field in ("name", "confirmation", "contradiction", "planned_action"):
+        for field in ("name", "planned_action"):
             if not str(item.get(field) or "").strip():
                 raise ValidationError({"scenarios": f"Scenario {index + 1} requires {field}."})
         normalized.append({
             "name": str(item["name"]).strip(), "probability": str(probability),
-            "confirmation": str(item["confirmation"]).strip(), "contradiction": str(item["contradiction"]).strip(),
+            "confirmation": str(item.get("confirmation") or "").strip(), "contradiction": str(item.get("contradiction") or "").strip(),
             "planned_action": str(item["planned_action"]).strip(), "sort_order": index,
         })
     return normalized
@@ -462,6 +462,10 @@ class CampaignViewSet(AccountScopedViewSet):
     @action(detail=True, methods=["post"], url_path="attach-fills")
     def attach_fills(self, request, pk=None):
         campaign = self.get_object()
+        if campaign.status == "planned":
+            raise ParseError("Confirm the plan and start execution before grouping fills.")
+        if campaign.status not in ("active", "paused"):
+            raise ParseError("Only active or paused decisions can receive fills.")
         fill_ids = request.data.get("fill_ids") or []
         if not fill_ids:
             raise ValidationError({"fill_ids": "Select at least one fill."})
@@ -481,20 +485,32 @@ class CampaignViewSet(AccountScopedViewSet):
                 if not attempt:
                     raise ValidationError({"attempt_id": "Attempt does not belong to this campaign."})
             else:
-                if campaign.status == "paused":
-                    raise ParseError("Resume the campaign before creating a new attempt. Closing fills may still be attached to an existing attempt.")
-                _delete_empty_attempts(campaign)
-                sequence = (campaign.attempts.order_by("-sequence_no").values_list("sequence_no", flat=True).first() or 0) + 1
-                if sequence > campaign.max_attempts:
-                    raise ValidationError({"attempt": "Campaign maximum attempts has been reached."})
-                attempt = Attempt.objects.create(
-                    campaign=campaign,
-                    sequence_no=sequence,
-                    planned_risk_r=request.data.get("planned_risk_r") or campaign.max_risk_r,
-                    reentry_reason=request.data.get("reentry_reason", ""),
-                    what_changed=request.data.get("what_changed", ""),
-                    was_planned=request.data.get("was_planned", True),
-                )
+                open_attempts = list(campaign.attempts.filter(status__in=["open", "scaling"]))
+                if len(open_attempts) == 1:
+                    attempt = open_attempts[0]
+                elif len(open_attempts) > 1:
+                    raise ParseError("Multiple open attempts require an explicit target attempt.")
+                else:
+                    prior_attempts_exist = campaign.attempts.filter(status="closed").exists()
+                    reentry_reason = str(request.data.get("reentry_reason") or "").strip()
+                    what_changed = str(request.data.get("what_changed") or "").strip()
+                    if prior_attempts_exist and (not reentry_reason or not what_changed):
+                        raise ValidationError({"reentry": "A new round after a closed position requires a re-entry reason and what changed."})
+                if not open_attempts:
+                    if campaign.status == "paused":
+                        raise ParseError("Resume the campaign before creating a new attempt. Closing fills may still be attached to an existing attempt.")
+                    _delete_empty_attempts(campaign)
+                    sequence = (campaign.attempts.order_by("-sequence_no").values_list("sequence_no", flat=True).first() or 0) + 1
+                    if sequence > campaign.max_attempts:
+                        raise ValidationError({"attempt": "Campaign maximum attempts has been reached."})
+                    attempt = Attempt.objects.create(
+                        campaign=campaign,
+                        sequence_no=sequence,
+                        planned_risk_r=request.data.get("planned_risk_r") or campaign.max_risk_r,
+                        reentry_reason=request.data.get("reentry_reason", ""),
+                        what_changed=request.data.get("what_changed", ""),
+                        was_planned=request.data.get("was_planned", True),
+                    )
             old_attempts = set()
             previous_assignments = {}
             for fill in fills:
@@ -513,8 +529,6 @@ class CampaignViewSet(AccountScopedViewSet):
                     _recalculate_campaign(old_campaign)
             _recalculate_attempt(attempt)
             _recalculate_campaign(campaign)
-            if campaign.status == "planned":
-                Campaign.objects.filter(pk=campaign.pk).update(status="active")
             _audit(_campaign_account(campaign), campaign, "FillsAttached", {
                 "attempt_id": str(attempt.id),
                 "fill_ids": list(map(int, fill_ids)),
